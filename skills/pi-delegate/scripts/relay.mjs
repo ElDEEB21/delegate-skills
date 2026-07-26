@@ -13,8 +13,10 @@
  * out of the brief on shared hosts; point pi at workspace files or environment
  * variables instead.
  *
- * pi's supported install distributions on Windows use a `.cmd` shim
- * (`shell: true`), so the relay launches with the shell there.
+ * pi launches with the shell disabled on POSIX. On Windows the relay resolves
+ * `pi` on PATH and, when it finds a `.cmd` shim, serializes arguments through
+ * `cmd /d /v:off /s /c` with explicit `%` and `"` escaping, avoiding cmd.exe's
+ * implicit `%VAR%` expansion and `!` delayed expansion.
  *
  * Usage:
  *   node relay.mjs --brief <file> [options]
@@ -48,14 +50,17 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import {
+  accessSync,
   appendFileSync,
+  constants as fsConstants,
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { constants, tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, delimiter, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_TIMEOUT = "30m";
@@ -167,17 +172,81 @@ function killChild(child, signal = "SIGTERM") {
   }
 }
 
-function piVersion() {
+function piVersion(launcher) {
+  if (!launcher) return null;
   try {
-    const out = execFileSync("pi", ["--version"], {
+    const spec = launchSpec(launcher, ["--version"]);
+    const out = execFileSync(spec.command, spec.argv, {
       encoding: "utf8",
-      shell: process.platform === "win32",
+      windowsVerbatimArguments: spec.windowsVerbatimArguments,
     }).trim();
     return out || "unknown";
   } catch (err) {
-    if (err && err.code === "ENOENT") return null;
     return "unknown";
   }
+}
+
+function resolvePiLauncher() {
+  if (process.platform !== "win32") {
+    const checked = {};
+    const pathValue = process.env.PATH || "";
+    for (const entry of pathValue.split(delimiter)) {
+      const dir = resolve(entry || ".");
+      if (checked[dir]) continue;
+      checked[dir] = true;
+      const candidate = join(dir, "pi");
+      try {
+        accessSync(candidate, fsConstants.X_OK);
+        if (statSync(candidate).isFile()) return { path: candidate, kind: "direct" };
+      } catch { /* keep searching */ }
+    }
+    return null;
+  }
+
+  const pathExt = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const pathValue = process.env.PATH || "";
+  const checked = {};
+  for (const entry of pathValue.split(delimiter)) {
+    const dir = resolve(entry || ".");
+    if (checked[dir]) continue;
+    checked[dir] = true;
+    for (const ext of pathExt) {
+      const candidate = join(dir, `pi${ext}`);
+      try {
+        if (!statSync(candidate).isFile()) continue;
+        const kind = ext === ".cmd" || ext === ".bat" ? "cmd" : "direct";
+        return { path: candidate, kind };
+      } catch { /* keep searching */ }
+    }
+  }
+  return null;
+}
+
+function escapeCmdArg(value) {
+  // cmd.exe expands %VAR% inside quoted strings and treats "" as a literal
+  // quote. Null bytes cannot be represented. All other characters are safe
+  // between the outer quotes when /v:off disables delayed ! expansion.
+  if (value.indexOf("\0") !== -1) {
+    throw new Error("cannot pass a null byte through cmd.exe; ensure the brief and flags contain only printable text");
+  }
+  return `"${value.replace(/%/g, "%%").replace(/"/g, '""')}"`;
+}
+
+function launchSpec(launcher, argv) {
+  if (launcher.kind === "direct") {
+    return { command: launcher.path, argv, windowsVerbatimArguments: false };
+  }
+  // .cmd shim on Windows: serialize through cmd /d /v:off /s /c to avoid
+  // %VAR% expansion, !delayed expansion, and auto-run commands.
+  const commandLine = [launcher.path, ...argv].map(escapeCmdArg).join(" ");
+  return {
+    command: process.env.COMSPEC || "cmd.exe",
+    argv: ["/d", "/v:off", "/s", "/c", `"${commandLine}"`],
+    windowsVerbatimArguments: true,
+  };
 }
 
 function gitTouchedFiles(cwd) {
@@ -310,11 +379,12 @@ function reportUnavailable(writeResult, resultPath) {
   process.exit(127);
 }
 
-function dispatch(opts, brief, run, writeResult) {
-  const child = spawn("pi", buildArgv(opts, brief), {
+function dispatch(opts, brief, launcher, run, writeResult) {
+  const spec = launchSpec(launcher, buildArgv(opts, brief));
+  const child = spawn(spec.command, spec.argv, {
     cwd: opts.cd,
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    windowsVerbatimArguments: spec.windowsVerbatimArguments,
     detached: process.platform !== "win32",
   });
 
@@ -330,7 +400,9 @@ function dispatch(opts, brief, run, writeResult) {
     // {"event":"message_start","id":"<uuid>","message":{...}}
     // {"event":"message_end","id":"<uuid>","message":{"content":[{"type":"text","text":"..."}],"usage":{...},"model":"...","provider":"..."}}
     // {"event":"session","id":"<uuid>",...}
-    if (typeof event.id === "string") {
+    // Only capture the sessionId from a session event — message_start/message_end
+    // carry a message-level id, not the session UUID.
+    if (event.event === "session" && typeof event.id === "string") {
       sessionId = event.id;
     }
     if (event.message && typeof event.message === "object") {
@@ -512,14 +584,15 @@ function main() {
     fail(`brief is ${Math.round(briefBytes / 1024)}KB; keep large context in workspace files instead of argv`);
   }
 
-  const version = piVersion();
+  const launcher = resolvePiLauncher();
+  const version = piVersion(launcher);
   const run = prepareRunDir(opts, brief);
   const writeResult = makeResultWriter(opts, version, run);
-  if (!version) {
+  if (!launcher || !version) {
     reportUnavailable(writeResult, run.resultPath);
     return;
   }
-  dispatch(opts, brief, run, writeResult);
+  dispatch(opts, brief, launcher, run, writeResult);
 }
 
 main();

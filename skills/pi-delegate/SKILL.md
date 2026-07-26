@@ -2,9 +2,9 @@
 name: pi-delegate
 description: >-
   Delegate a coding task to the pi CLI (`pi`) as a background implementer, then review its diff and
-  land it yourself. Use this whenever the user wants to hand implementation work to pi - phrasings like
+  land it yourself. Use this whenever the user wants to hand implementation work to pi — phrasings like
   "have pi implement X", "delegate this to pi", "run it through pi", or "use pi to implement/fix/refactor"
-  - or wants to run a queue of coding tasks through pi while staying the reviewer. DO NOT USE for tasks
+  — or to run a queue of coding tasks through pi while staying the reviewer. DO NOT USE for tasks
   small enough to do inline, or when the user wants the code written directly without delegating.
 license: MIT
 compatibility: Requires the `pi` CLI installed and authenticated, Node 18+, and git.
