@@ -6,7 +6,7 @@ Skills for **delegating coding work to a separate CLI agent and landing it yours
 orchestrator) writes a self-contained brief, dispatches it to an implementer CLI, then reviews the diff
 and commits — staying the reviewer the whole way.
 
-Seven skills ship today — same loop, different implementer:
+Eight skills ship today — same loop, different implementer:
 
 | Skill | Drives | Autonomy | Resume |
 | --- | --- | --- | --- |
@@ -16,6 +16,7 @@ Seven skills ship today — same loop, different implementer:
 | `agy-delegate` | Google Antigravity CLI (`agy`) | Antigravity's own permission policy; bypass is opt-in | `--resume-last`, `--conversation <id>` |
 | `grok-delegate` | Grok Build CLI (`grok`) | explicit: default workspace-scoped, `--read-only` best-effort with violation detection, `--full-access` opt-in | `--resume-last`, `--session <id>` |
 | `kimi-delegate` | Kimi Code CLI (`kimi`) | headless runs always use Kimi's auto permission mode | `--resume-last`, `--session <id>` |
+| `pi-delegate` | pi CLI (`pi`) | `--approve` default for headless; `--read-only` restricts tool surface; project trust controlled by `--no-approve` | `--resume-last`, `--session <id>` |
 | `qoder-delegate` | [Qoder CLI](https://docs.qoder.com/en/cli/quick-start) (`qodercli`) | `auto` default; bypass is opt-in; effective mode is reported | `--resume-last`, `--resume <id>` |
 
 ## Install
@@ -57,6 +58,7 @@ Use $claude-delegate to have a separate Claude Code session implement the parser
 Use $codex-delegate to have Codex implement the refactor in services/billing/, then review and commit it.
 Use $kimi-delegate to have Kimi implement the UI cleanup, then review and commit it.
 Use $qoder-delegate to have Qoder implement the parser fix with a 32768-token context window, then review and commit it.
+Use $pi-delegate to have pi implement the refactor with gpt-4.1 from provider github, then review and commit it.
 Use $codex-delegate to run this queue of migration tasks through Codex while I review each one.
 ```
 
@@ -117,6 +119,14 @@ Same loop for the Kimi Code CLI (`kimi`). Headless `kimi -p` always runs in Kimi
 mode (it rejects `--yolo`/`--auto`/`--plan` outright), so the skill is blunt about it: there is no
 CLI-enforced read-only mode — `touchedFiles` and the diff, not a flag, are the guarantee.
 
+### pi-delegate
+
+Same loop for pi CLI (`pi`). The brief is passed through `-p <brief>` as a command-line argument
+(not stdin), so the relay rejects briefs over ~12 KB on Windows (120 KB on POSIX) before launching.
+pi has no sandbox concept — `--read-only` restricts its tools to `read,grep,find,ls` instead.
+Resume passes `-c` (last session) or `--session-id <id>` (a specific session). Project resources
+can be trusted with `--approve` (default) or skipped with `--no-approve`.
+
 ### qoder-delegate
 
 Same loop for Qoder CLI (`qodercli`). The relay verifies the installed binary and forwards a requested
@@ -155,6 +165,7 @@ bundled `relay.mjs` is the default because it needs nothing but the `codex` bina
   [`opencode`](https://opencode.ai) (`opencode auth login`) · `agy` (Antigravity's first-launch setup) ·
   `grok` (`npm i -g @xai-official/grok`, then `grok login`) ·
   [`kimi`](https://moonshotai.github.io/kimi-code/en/) (`brew install kimi-code`, then `kimi login`) ·
+  `pi` (install according to pi's official documentation, then set `*_API_KEY`) ·
   [`qodercli`](https://docs.qoder.com/en/cli/quick-start) (`qodercli login`, or
   `QODER_PERSONAL_ACCESS_TOKEN` for automation).
 - Node 18+ and `git`.
@@ -188,6 +199,9 @@ This package is intentionally inspectable:
   file-based brief delivery, resume; read-only is best-effort by measurement, hence the violation flag).
 - `kimi-delegate` — verified end-to-end on macOS against `kimi` 0.24.0 (headless `-p` edit run,
   stream-json parsing, `--session`/`--continue` resume).
+- `pi-delegate` — designed against `pi` 0.80.2 (`--mode json` event stream, `-p` brief delivery,
+  `-c`/`--session-id` resume, `--model`/`--provider` forwarding, `--approve`/`--no-approve` trust control,
+  `--tools` read-only mode). End-to-end verification is pending.
 - `qoder-delegate` — contract-tested for argument validation, bounded version preflight, missing binary, model/context
   forwarding, result parsing, and whole-process-tree timeout/abort cleanup; verified end-to-end on
   macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model

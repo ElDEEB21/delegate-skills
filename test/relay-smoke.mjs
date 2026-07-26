@@ -43,7 +43,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder"];
+const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "pi", "qoder"];
 const binaryName = (skill) => skill === "qoder" ? "qodercli" : skill;
 const relayPath = (skill) => join(here, "..", "skills", `${skill}-delegate`, "scripts", "relay.mjs");
 const WIN = process.platform === "win32";
@@ -233,7 +233,7 @@ const shimDir = join(scratch, "shim");
 mkdirSync(shimDir);
 writeFileSync(join(shimDir, "fake-cli.cjs"), FAKE);
 if (WIN) {
-  for (const skill of ["claude", "codex", "opencode", "grok"]) {
+  for (const skill of ["claude", "codex", "opencode", "grok", "pi"]) {
     writeFileSync(join(shimDir, `${skill}.cmd`), `@node "%~dp0fake-cli.cjs" %*\r\n`);
   }
   const windir = process.env.WINDIR || "C:\\Windows";
@@ -297,7 +297,7 @@ const emptyEffortRun = spawnSync(process.execPath,
 check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 
 // opencode refuses a fresh run without an explicit model
-const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [] };
+const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], pi: [], qoder: [] };
 
 // ---- Qoder's documented print-mode argv and structured result ----
 {
