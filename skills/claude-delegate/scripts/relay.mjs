@@ -581,6 +581,7 @@ function gitTouchedFiles(cwd) {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 64 * 1024 * 1024,
     });
     return output.split("\n").map((line) => line.trimEnd()).filter(Boolean);
   } catch {
