@@ -150,6 +150,11 @@ function parseArgs(argv) {
     fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
   }
   if (parseDuration(opts.timeout) === 0) fail("--timeout must be greater than zero");
+  // setTimeout overflows past 2^31 - 1 ms (~24.8 days) and fires immediately,
+  // which would read as an instant spurious timeout — reject it up front.
+  if (parseDuration(opts.timeout) > 2_147_483_647) {
+    fail(`--timeout "${opts.timeout}" exceeds the maximum schedulable watchdog (~24.8 days)`);
+  }
   if (!existsSync(opts.cd) || !statSync(opts.cd).isDirectory()) {
     fail(`working directory not found: ${opts.cd}`);
   }
@@ -200,6 +205,20 @@ function killChild(child, signal = "SIGTERM") {
 function piVersion(timeoutMs) {
   // Bounded preflight: a hung or crashing CLI must not hang the relay or
   // masquerade as exit 127. Only a missing binary means "unavailable".
+  if (process.platform === "win32") {
+    // The probe below runs through a shell on win32 (the .cmd shim), and
+    // cmd.exe reports a missing binary as exit 1 — not ENOENT — so ask
+    // where.exe first to keep "not installed" classified as pi_unavailable.
+    // where.exe ships in System32 on every supported Windows; a non-ENOENT
+    // failure from it means it ran and found no pi on PATH.
+    try {
+      execFileSync("where.exe", ["pi"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    } catch (whereError) {
+      if (!whereError || whereError.code !== "ENOENT") return { version: null, error: null };
+      // where.exe itself missing is practically impossible; fall through to
+      // the normal probe rather than guess.
+    }
+  }
   try {
     return {
       version: execFileSync("pi", ["--version"], {

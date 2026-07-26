@@ -526,6 +526,29 @@ const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"],
   check("pi validation: zero timeout is rejected before artifacts",
     zeroTimeout.status === 2 && !existsSync(zeroTimeoutOutDir));
 
+  const hugeTimeoutOutDir = join(scratch, "out-huge-timeout-pi");
+  const hugeTimeout = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", hugeTimeoutOutDir,
+    "--timeout", "10000h",
+  ], { env: baseEnv, encoding: "utf8" });
+  check("pi validation: a timeout beyond Node's timer range is rejected before artifacts",
+    hugeTimeout.status === 2 && !existsSync(hugeTimeoutOutDir));
+
+  const missingOutDir = join(scratch, "out-unavailable-pi");
+  const missing = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", missingOutDir,
+  ], { env: { ...process.env, PATH: "" }, encoding: "utf8" });
+  check("pi unavailable: missing binary writes the structured result",
+    missing.status === 127 &&
+    existsSync(join(missingOutDir, "result.json")) &&
+    result(missingOutDir).status === "pi_unavailable");
+
   for (const [mode, expectedStatus, expectedExit] of [
     ["pi-version-fail", "failed", 7],
     // The hang case is POSIX-only: on win32 the preflight kill fells cmd.exe

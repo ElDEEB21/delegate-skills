@@ -104,7 +104,9 @@ A pre-run usage error exits 2 and writes no result. A missing `pi` exits 127 and
   re-dispatch, or split the task into smaller briefs.
 - **`status: "timeout"`:** the `--timeout` watchdog killed the run; `error` reads
   `pi did not finish within --timeout <dur>; killed by the relay watchdog`. Increase `--timeout`
-  or split the task. The relay sends SIGTERM, waits 10 seconds, then sends SIGKILL if needed.
+  or split the task. On POSIX the relay sends SIGTERM to the process group, waits 10 seconds,
+  then sends SIGKILL if needed; on Windows there is no escalation phase — the whole process tree
+  is felled immediately with `taskkill /pid <pid> /t /f`.
 - **Empty `finalMessage`:** inspect `touchedFiles` and the diff. Add a
   `<structured_output_contract>` to the next brief to require a closing report.
 
