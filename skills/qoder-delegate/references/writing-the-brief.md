@@ -77,8 +77,9 @@ partial edits, then dispatch a corrected brief.
 ## Keep secrets out of argv
 
 Qoder print mode receives the brief as a command-line argument, visible through process inspection on
-the host. The relay rejects briefs over 120 KB. Put secrets and large context in appropriately
-protected workspace files or environment variables, then reference them by name or path.
+the host. The relay rejects briefs over 120 KB, or 12 KB on native Windows where command lines are
+shorter. Put secrets and large context in appropriately protected workspace files or environment
+variables, then reference them by name or path.
 
 Continue with [dispatch-and-poll.md](dispatch-and-poll.md), then
 [review-and-land.md](review-and-land.md).

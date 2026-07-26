@@ -394,6 +394,9 @@ const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"],
     result(latestOutDir).resumed === true);
 
   const missingOutDir = join(scratch, "out-unavailable-qoder");
+  mkdirSync(missingOutDir);
+  writeFileSync(join(missingOutDir, "result.json"), "{\"status\":\"stale\"}\n");
+  writeFileSync(join(missingOutDir, "final.txt"), "stale final\n");
   const missing = spawnSync(process.execPath, [
     relayPath("qoder"),
     "--brief", briefPath,
@@ -403,7 +406,22 @@ const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"],
   check("qoder unavailable: missing binary writes the structured result",
     missing.status === 127 &&
     existsSync(join(missingOutDir, "result.json")) &&
-    result(missingOutDir).status === "qoder_unavailable");
+    result(missingOutDir).status === "qoder_unavailable" &&
+    !existsSync(join(missingOutDir, "final.txt")));
+
+  if (WIN) {
+    const longBrief = join(scratch, "long-qoder-brief.txt");
+    const longOutDir = join(scratch, "out-long-brief-qoder");
+    writeFileSync(longBrief, "x".repeat(13 * 1024));
+    const rejected = spawnSync(process.execPath, [
+      relayPath("qoder"),
+      "--brief", longBrief,
+      "--cd", workDir,
+      "--out-dir", longOutDir,
+    ], { env: baseEnv, encoding: "utf8" });
+    check("qoder Windows: oversized argv brief is rejected before artifacts",
+      rejected.status === 2 && !existsSync(longOutDir));
+  }
 
   for (const [mode, expectedStatus, expectedExit] of [
     ["qoder-version-hang", "timeout", 124],

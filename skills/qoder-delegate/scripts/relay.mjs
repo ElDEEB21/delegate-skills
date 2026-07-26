@@ -45,6 +45,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -54,7 +55,7 @@ import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_TIMEOUT = "30m";
 const VERSION_TIMEOUT_MS = 10_000;
-const MAX_BRIEF_BYTES = 120 * 1024;
+const MAX_BRIEF_BYTES = (process.platform === "win32" ? 12 : 120) * 1024;
 const PERMISSION_MODES = new Set([
   "default",
   "accept_edits",
@@ -285,6 +286,8 @@ function prepareRunDir(opts, brief) {
     stderrPath: join(outDir, "stderr.txt"),
     resultPath: join(outDir, "result.json"),
   };
+  rmSync(run.finalPath, { force: true });
+  rmSync(run.resultPath, { force: true });
   writeFileSync(run.briefPath, brief, "utf8");
   writeFileSync(run.eventsPath, "", "utf8");
   writeFileSync(run.stderrPath, "", "utf8");
