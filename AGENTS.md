@@ -2,9 +2,9 @@
 
 This repo is a [Skills CLI](https://github.com/vercel-labs/skills) package of **delegation skills** —
 skills that let an orchestrating agent drive a separate CLI coding agent as an implementer, then review
-and land the result. Seven skills ship today: `claude-delegate` (Claude Code), `codex-delegate` (OpenAI
+and land the result. Eight skills ship today: `claude-delegate` (Claude Code), `codex-delegate` (OpenAI
 Codex), `opencode-delegate` (OpenCode), `agy-delegate` (Google Antigravity), `grok-delegate` (Grok
-Build), `kimi-delegate` (Kimi Code), and `qoder-delegate` (Qoder CLI); siblings like
+Build), `kimi-delegate` (Kimi Code), `qoder-delegate` (Qoder CLI), and `pi-delegate` (Pi CLI); siblings like
 `gemini-delegate` can be added later without renaming the repo.
 
 ## Vocabulary
@@ -29,6 +29,7 @@ jargon. Use these terms; don't invent synonyms.
 | `session`, `--continue`, `model alias`, `auto permission mode`, `plan mode`, `--yolo` | Kimi Code's own terms — use verbatim when discussing `kimi` | don't paraphrase them |
 | `session`, `--continue`, `--resume`, `permission mode` (`acceptEdits`/`plan`/`bypassPermissions`), `sandbox`, `subagents`, `agent teams`, `background sessions` | Claude Code's own terms — use verbatim when discussing Claude | never use `subagents` as a generic synonym for implementer |
 | `session`, `-c`, `--resume`, `permission mode` (`default`/`accept_edits`/`auto`/`bypass_permissions`/`dont_ask`/`plan`), `print mode`, `stream-json`, `model`, `context window` | Qoder CLI's own terms — use verbatim when discussing Qoder | don't paraphrase them |
+| `session`, `--continue`, `--session`, `print mode`, `--mode json`, `tools`, `context files`, `project trust` | Pi's own terms — use verbatim when discussing `pi` | don't paraphrase them |
 
 Banned on sight: coined umbrella terms in user-facing surfaces (README headings, `skills.sh.json`
 titles); any reference to the author's local machine or config; model/version pins (`GPT-5.x` →
@@ -52,7 +53,7 @@ CLI flag, field, and command in the docs must match the installed implementer CL
 - **Executables:** keep them minimal and inspectable. Today there is one per skill — a
   `scripts/relay.mjs` under each of `skills/claude-delegate/`, `skills/codex-delegate/`,
   `skills/opencode-delegate/`, `skills/agy-delegate/`, `skills/grok-delegate/`, and
-  `skills/kimi-delegate/`, and `skills/qoder-delegate/` — each Node built-ins only, no dependencies,
+  `skills/kimi-delegate/`, `skills/qoder-delegate/`, and `skills/pi-delegate/` — each Node built-ins only, no dependencies,
   no network calls of its own, no credentials, no telemetry. New scripts must hold the same line,
   and the README's trust section must stay accurate.
 
@@ -62,7 +63,7 @@ CLI flag, field, and command in the docs must match the installed implementer CL
 - Smoke-test any changed script directly (e.g. `node skills/<skill>/scripts/relay.mjs --help`, and a
   no-write or read-only run against a throwaway repo) before relying on it.
 - If you touch how a `relay.mjs` launches its implementer CLI, smoke-test on Windows too (native
-  PowerShell/cmd, not just Git Bash/WSL): the `codex`, `opencode`, and `grok` launches need
+  PowerShell/cmd, not just Git Bash/WSL): the `codex`, `opencode`, `grok`, and `pi` launches need
   `shell:true` on win32 to resolve the `.cmd` shim (which is why their spaceable args are quoted and
   value flags token-validated); the `claude` launch resolves a native `.exe` or separately serializes
   a `.cmd` shim; `agy`, `kimi`, and current `qodercli` installs use native binaries. Each changed

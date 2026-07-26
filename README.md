@@ -6,7 +6,7 @@ Skills for **delegating coding work to a separate CLI agent and landing it yours
 orchestrator) writes a self-contained brief, dispatches it to an implementer CLI, then reviews the diff
 and commits — staying the reviewer the whole way.
 
-Seven skills ship today — same loop, different implementer:
+Eight skills ship today — same loop, different implementer:
 
 | Skill | Drives | Autonomy | Resume |
 | --- | --- | --- | --- |
@@ -17,6 +17,7 @@ Seven skills ship today — same loop, different implementer:
 | `grok-delegate` | Grok Build CLI (`grok`) | explicit: default workspace-scoped, `--read-only` best-effort with violation detection, `--full-access` opt-in | `--resume-last`, `--session <id>` |
 | `kimi-delegate` | Kimi Code CLI (`kimi`) | headless runs always use Kimi's auto permission mode | `--resume-last`, `--session <id>` |
 | `qoder-delegate` | [Qoder CLI](https://docs.qoder.com/en/cli/quick-start) (`qodercli`) | `auto` default; bypass is opt-in; effective mode is reported | `--resume-last`, `--resume <id>` |
+| `pi-delegate` | [Pi CLI](https://github.com/earendil-works/pi-mono) (`pi`) | full local tools by default (no sandbox, no permission modes); `--read-only` enforces a `read,grep,find,ls` tool surface | `--resume-last`, `--session <id>` |
 
 ## Install
 
@@ -57,6 +58,7 @@ Use $claude-delegate to have a separate Claude Code session implement the parser
 Use $codex-delegate to have Codex implement the refactor in services/billing/, then review and commit it.
 Use $kimi-delegate to have Kimi implement the UI cleanup, then review and commit it.
 Use $qoder-delegate to have Qoder implement the parser fix with a 32768-token context window, then review and commit it.
+Use $pi-delegate to have Pi implement the parser fix, then review and commit it.
 Use $codex-delegate to run this queue of migration tasks through Codex while I review each one.
 ```
 
@@ -126,6 +128,15 @@ models that support explicit sizing. Non-interactive runs use Qoder's `auto` per
 default; bypass remains opt-in. Qoder falls back to `default` outside a trusted directory, so the
 relay records both the requested and effective modes.
 
+### pi-delegate
+
+Same loop for the Pi coding agent CLI (`pi`). The brief rides stdin to `pi --mode json` — no argv
+size cap, nothing in the host process list — and the relay lifts the session id from the JSON
+event stream for later resume. Pi has no sandbox and no permission modes: a default headless run
+writes and executes without prompts, so the guarantees are `--read-only` (an enforced
+`read,grep,find,ls` tool surface, covering extension tools too) and the diff. The relay never
+passes `--approve`, leaving project `.pi` resources untrusted.
+
 ### gemini-delegate
 
 *Planned.* A delegate skill for the Gemini CLI, if and when it gains a comparable non-interactive mode.
@@ -156,7 +167,9 @@ bundled `relay.mjs` is the default because it needs nothing but the `codex` bina
   `grok` (`npm i -g @xai-official/grok`, then `grok login`) ·
   [`kimi`](https://moonshotai.github.io/kimi-code/en/) (`brew install kimi-code`, then `kimi login`) ·
   [`qodercli`](https://docs.qoder.com/en/cli/quick-start) (`qodercli login`, or
-  `QODER_PERSONAL_ACCESS_TOKEN` for automation).
+  `QODER_PERSONAL_ACCESS_TOKEN` for automation) ·
+  [`pi`](https://github.com/earendil-works/pi-mono) (`npm install -g @earendil-works/pi-coding-agent`,
+  then `/login` or an API-key environment variable).
 - Node 18+ and `git`.
 - An orchestrating agent that can run shell commands and read files.
 - Shell examples assume bash/zsh (macOS/Linux, or Git Bash/WSL on Windows).
@@ -192,11 +205,18 @@ This package is intentionally inspectable:
   forwarding, result parsing, and whole-process-tree timeout/abort cleanup; verified end-to-end on
   macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model
   and 32768-token context window, no commit).
+- `pi-delegate` — verified end-to-end on macOS against `pi` 0.82.1 (stdin brief delivery, a write
+  run, `--read-only` leaving a clean tree, `--session`/`--resume-last` resume, session-id capture
+  from the JSON stream, a bad-model failure, watchdog timeout felling the process tree,
+  `pi_unavailable`/127, and usage errors exiting 2 without artifacts). CI drives its timeout,
+  abort, success, and preflight paths against a stand-in binary on Linux and Windows; a native
+  Windows launch is unverified.
 - `opencode-delegate` — requires `--model`, since OpenCode has no safe default.
-- Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); the Qoder
-  relay targets its currently documented native `qodercli.exe`. Native Windows launch smokes for
-  `claude`/`agy`/`grok`/`kimi`/`qoder` are still pending. Claude's own shell sandbox is unsupported on
-  native Windows regardless of launch mechanics.
+- Windows: the codex/opencode/grok/pi launches handle the `.cmd` shim (`shell:true`; pi's value
+  flags are token-validated and its brief rides stdin); the Qoder relay targets its currently
+  documented native `qodercli.exe`. Native Windows launch smokes for
+  `claude`/`agy`/`grok`/`kimi`/`qoder`/`pi` are still pending. Claude's own shell sandbox is
+  unsupported on native Windows regardless of launch mechanics.
 - The full delegate → review → commit loop is designed for and run on Claude Code; other orchestrators
   (Cursor, …) are designed-for but unproven.
 

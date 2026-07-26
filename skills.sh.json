@@ -11,7 +11,8 @@
         "agy-delegate",
         "grok-delegate",
         "kimi-delegate",
-        "qoder-delegate"
+        "qoder-delegate",
+        "pi-delegate"
       ]
     }
   ]
