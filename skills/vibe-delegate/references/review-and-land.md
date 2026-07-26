@@ -52,6 +52,12 @@ to the human. Run relevant guard skills if installed.
 When the gates pass and the diff holds, **the orchestrator commits**, never the implementer. Write a
 clear message describing what landed.
 
+From dispatch until that commit, the uncommitted working tree is the authoritative copy of Vibe's
+work. Never reflexively run `git checkout`, `reset`, `clean`, or switch branches after an interrupted
+run. Inspect `git status`, `git diff`, `git diff --cached` for staged changes, and open every untracked
+file (`??`) directly because no diff shows its contents. After inspection, discarding a bad or
+premise-contaminated change can be correct; the rule is to preserve the evidence until it is reviewed.
+
 ## Rework: send the delta
 
 Continue the same session with only the correction:
@@ -61,9 +67,12 @@ echo "The fix is right, but the test mocks the DB session. Use the real migrated
 the unused import." | node "<skill-dir>/scripts/relay.mjs" --resume-last --cd /path/to/repo
 ```
 
-Use `--session <id>` instead when resuming the specific id recorded in `result.json`. If `sessionId`
-is `null` in `result.json`, use `--resume-last` to continue the most recent session. Rework gets the
-same gate rerun, test review, diff review, and implementer sweep.
+Vibe's stream does not expose a session id, so use `--resume-last` normally. Use `--session <id>` only
+when the id came from outside the relay. Rework gets the same gate rerun, test review, diff review, and
+implementer sweep.
+
+Default `accept-edits` runs cannot execute most gates headlessly; the orchestrator runs them.
+`--full-access` permits arbitrary shell/tool execution and requires explicit human authorization.
 
 ## Surface, do not absorb
 

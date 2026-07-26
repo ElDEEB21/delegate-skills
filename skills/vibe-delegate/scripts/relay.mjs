@@ -10,9 +10,9 @@
  *
  * Trust posture: relay.mjs itself makes no network calls, reads or writes no
  * credentials, and sends no telemetry; it has no dependencies (Node built-ins
- * only). It shells out only to `vibe` and `git`. The `vibe` process it launches
- * does authenticate — exactly as you do at the terminal. Read this file before
- * you run it.
+ * only). It shells out only to `vibe`, `git`, and Windows `taskkill` for
+ * process-tree termination. The `vibe` process it launches does authenticate —
+ * exactly as you do at the terminal. Read this file before you run it.
  *
  * Note: `vibe --prompt` takes the prompt as a command-line argument, so the
  * brief is visible in the host process list (`ps`, /proc). On a shared machine
@@ -22,14 +22,13 @@
  * It deliberately does NOT commit. Committing is always the orchestrator's job
  * — after it reviews the diff and re-runs the project gates.
  *
- * Default mode uses Vibe's `auto-approve` agent profile, which auto-approves
- * all tool executions. `--plan-only` uses the `plan` agent (exploration and
- * planning, auto-approves only safe read tools); this is best-effort — check
- * `touchedFiles` and the diff after every run regardless of mode.
+ * Default mode uses Vibe's `accept-edits` agent, which auto-approves its
+ * built-in file edits while other tools remain unapproved in headless mode.
+ * `--full-access` explicitly opts into `auto-approve`; `--plan-only` selects
+ * Vibe's read-only `plan` agent.
  *
- * Mistral Vibe works on Windows, but the upstream project officially targets
- * UNIX environments. The relay does not set `shell:true` on win32, so Windows
- * is untested; consult the Mistral Vibe documentation for Windows guidance.
+ * Mistral Vibe officially targets UNIX environments. Native Windows launch is
+ * unverified; consult the Mistral Vibe documentation for Windows guidance.
  *
  * Usage:
  *   node relay.mjs --brief <file> [options]
@@ -39,12 +38,15 @@
  *   --brief <file>           Path to the brief. If omitted, read it from stdin.
  *   --cd <dir>               Working root for Vibe (default: current directory).
  *   --max-turns <n>          Maximum number of Vibe agent turns (--max-turns).
+ *   --max-price <usd>        Maximum session cost in USD (--max-price).
+ *   --max-tokens <n>         Maximum cumulative session tokens (--max-tokens).
  *   --session <id>           Resume a specific Vibe session (--resume SESSION_ID);
  *                            send only the delta brief.
  *   --resume-last            Resume the most recent Vibe session (--continue);
  *                            send only the delta brief.
- *   --plan-only              Use Vibe's plan agent (exploration/planning, best-
- *                            effort read-only — verify touchedFiles after run).
+ *   --plan-only              Use Vibe's read-only plan agent.
+ *   --full-access            Use Vibe's auto-approve agent; all tool executions
+ *                            are approved. Mutually exclusive with --plan-only.
  *   --enabled-tools <tool>   Enable only this tool (--enabled-tools). Repeatable.
  *   --disabled-tools <tool>  Disable this tool (--disabled-tools). Repeatable.
  *   --timeout <dur>          Relay-side watchdog (default: 30m). Vibe has no
@@ -54,25 +56,38 @@
  *   -h, --help               Show this help.
  *
  * Result: written to <out-dir>/result.json and summarized on stdout —
- *   status, exitCode, signal, vibeVersion, sessionId, finalMessage (Vibe's own
- *   report), touchedFiles (git porcelain, null if git cannot report), and paths
- *   to brief.txt, final.txt, events.jsonl, and stderr.txt.
+ *   status, exitCode, signal, vibeVersion, agent, finalMessage (the last
+ *   assistant message), touchedFiles (git porcelain, null if git cannot report),
+ *   and paths to brief.txt, final.txt, events.jsonl, and stderr.txt.
  *
  * Exit codes: a pre-run usage error (bad/missing args, empty brief) exits 2
  * before any run and writes no result file; a missing `vibe` binary exits 127;
  * otherwise the exit code mirrors Vibe's own (0 success, non-zero failure). If
  * the child dies on a signal, the exit code is 128 plus the signal number and
- * `result.json` records the signal. Once the brief validates, `result.json` is
- * written on every outcome — completed, failed, or vibe_unavailable.
+ * `result.json` records the signal. Once the run artifacts are prepared,
+ * `result.json` is written on every outcome — completed, failed, timeout, aborted, or
+ * vibe_unavailable.
  */
 
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_TIMEOUT = "30m";
+const MAX_TIMER_MS = 2_147_483_647;
+const MAX_BRIEF_BYTES = (process.platform === "win32" ? 12 : 120) * 1024;
+const PROBE_TIMEOUT_MS = 10_000;
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -84,9 +99,12 @@ function parseArgs(argv) {
     brief: null,
     cd: process.cwd(),
     maxTurns: null,
+    maxPrice: null,
+    maxTokens: null,
     session: null,
     resumeLast: false,
     planOnly: false,
+    fullAccess: false,
     enabledTools: [],
     disabledTools: [],
     timeout: DEFAULT_TIMEOUT,
@@ -111,13 +129,34 @@ function parseArgs(argv) {
       case "--max-turns": {
         const v = next();
         const n = Number(v);
-        if (!Number.isInteger(n) || n < 1) fail(`--max-turns must be a positive integer; got: ${v}`);
+        if (!/^[1-9]\d*$/.test(v) || !Number.isSafeInteger(n)) {
+          fail(`--max-turns must be a positive safe integer; got: ${v}`);
+        }
         opts.maxTurns = n;
+        break;
+      }
+      case "--max-price": {
+        const v = next();
+        const n = Number(v);
+        if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(v) || !Number.isFinite(n) || n <= 0) {
+          fail(`--max-price must be a positive decimal number; got: ${v}`);
+        }
+        opts.maxPrice = n;
+        break;
+      }
+      case "--max-tokens": {
+        const v = next();
+        const n = Number(v);
+        if (!/^[1-9]\d*$/.test(v) || !Number.isSafeInteger(n)) {
+          fail(`--max-tokens must be a positive safe integer; got: ${v}`);
+        }
+        opts.maxTokens = n;
         break;
       }
       case "--session": opts.session = next(); break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--plan-only": opts.planOnly = true; break;
+      case "--full-access": opts.fullAccess = true; break;
       case "--enabled-tools": opts.enabledTools.push(next()); break;
       case "--disabled-tools": opts.disabledTools.push(next()); break;
       case "--timeout": opts.timeout = next(); break;
@@ -129,10 +168,28 @@ function parseArgs(argv) {
   if (opts.resumeLast && opts.session) {
     fail("--resume-last and --session are mutually exclusive; pass only one");
   }
+  if (opts.session !== null && !opts.session.trim()) fail("--session must not be empty");
+  if (opts.planOnly && opts.fullAccess) {
+    fail("--plan-only and --full-access are mutually exclusive");
+  }
+  if (opts.enabledTools.some((tool) => !tool.trim())) fail("--enabled-tools must not be empty");
+  if (opts.disabledTools.some((tool) => !tool.trim())) fail("--disabled-tools must not be empty");
   // The watchdog is relay-only (vibe has no timeout flag), so a malformed
   // --timeout must fail loudly here — a silent 30m fallback would be wrong.
   if (parseDuration(opts.timeout) === null) {
-    fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
+    fail(`--timeout "${opts.timeout}" is invalid or too long; use a positive h/m/s duration no longer than about 24 days`);
+  }
+  try {
+    if (!statSync(opts.cd).isDirectory()) fail(`--cd is not a directory: ${opts.cd}`);
+  } catch {
+    fail(`--cd directory not found: ${opts.cd}`);
+  }
+  if (opts.outDir && existsSync(opts.outDir)) {
+    try {
+      if (!statSync(opts.outDir).isDirectory()) fail(`--out-dir is not a directory: ${opts.outDir}`);
+    } catch {
+      fail(`cannot inspect --out-dir: ${opts.outDir}`);
+    }
   }
   return opts;
 }
@@ -162,23 +219,36 @@ function readBrief(opts) {
   return stdin;
 }
 
-function vibeVersion() {
+function vibeVersion(timeoutMs) {
   try {
-    const out = execFileSync("vibe", ["--version"], { encoding: "utf8" }).trim();
-    return out || "unknown";
-  } catch (err) {
-    // Only a missing binary means "unavailable"; any other version-probe
-    // failure must not masquerade as exit 127.
-    if (err && err.code === "ENOENT") return null;
-    return "unknown";
+    return {
+      version: execFileSync("vibe", ["--version"], {
+        encoding: "utf8",
+        timeout: Math.min(timeoutMs, PROBE_TIMEOUT_MS),
+        killSignal: "SIGKILL",
+      }).trim() || "unknown",
+      error: null,
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { version: null, error: null };
+    return { version: null, error };
   }
 }
 
 function parseDuration(duration) {
-  // Whole-string match: "1mtypo" must be rejected, not read as one minute.
   const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(duration);
   if (!match || (!match[1] && !match[2] && !match[3])) return null;
-  return (Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)) * 1000;
+  try {
+    const seconds =
+      BigInt(match[1] || 0) * 3600n +
+      BigInt(match[2] || 0) * 60n +
+      BigInt(match[3] || 0);
+    const milliseconds = seconds * 1000n;
+    if (milliseconds <= 0n || milliseconds > BigInt(MAX_TIMER_MS)) return null;
+    return Number(milliseconds);
+  } catch {
+    return null;
+  }
 }
 
 function gitTouchedFiles(cwd) {
@@ -186,10 +256,35 @@ function gitTouchedFiles(cwd) {
   // the caller can tell "git unavailable" apart from "Vibe changed nothing."
   // [] means git ran and the working tree is clean.
   try {
-    const out = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" });
+    const out = execFileSync("git", ["status", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+      timeout: PROBE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      maxBuffer: 64 * 1024 * 1024,
+    });
     return out.split("\n").map((line) => line.trimEnd()).filter(Boolean);
   } catch {
     return null;
+  }
+}
+
+function killChild(child, signal = "SIGTERM") {
+  // A timeout/abort must stop Vibe's tools too, or a descendant could keep
+  // editing after the relay reports that the run ended.
+  if (process.platform === "win32") {
+    if (signal !== "SIGTERM") return; // taskkill /f already felled the tree
+    try {
+      execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: ["ignore", "ignore", "inherit"],
+      });
+    } catch { /* The tree already exited. */ }
+  } else {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      try { child.kill(signal); } catch { /* The tree already exited. */ }
+    }
   }
 }
 
@@ -197,13 +292,21 @@ function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function agentName(opts) {
+  if (opts.planOnly) return "plan";
+  if (opts.fullAccess) return "auto-approve";
+  return "accept-edits";
+}
+
 function buildArgv(opts, brief) {
   const argv = [
     "--output", "streaming",
-    "--agent", opts.planOnly ? "plan" : "auto-approve",
+    "--agent", agentName(opts),
     "--trust",
   ];
   if (opts.maxTurns != null) argv.push("--max-turns", String(opts.maxTurns));
+  if (opts.maxPrice != null) argv.push("--max-price", String(opts.maxPrice));
+  if (opts.maxTokens != null) argv.push("--max-tokens", String(opts.maxTokens));
   if (opts.session) argv.push("--resume", opts.session);
   else if (opts.resumeLast) argv.push("--continue");
   for (const tool of opts.enabledTools) argv.push("--enabled-tools", tool);
@@ -230,16 +333,8 @@ function makeLineScanner(onObject) {
   };
 }
 
-function extractFromEvent(obj, textChunks, sessionIdRef) {
+function extractFromEvent(obj, textChunks) {
   if (!obj || typeof obj !== "object") return;
-
-  // Session ID extraction (best-effort; checked on every event type since the
-  // session metadata can appear in any message).
-  if (typeof obj.session_id === "string" && obj.session_id) {
-    sessionIdRef.value = obj.session_id;
-  } else if (obj.metadata && typeof obj.metadata.session_id === "string") {
-    sessionIdRef.value = obj.metadata.session_id;
-  }
 
   // Primary format: { role: "assistant", content: "..." }
   if (obj.role === "assistant") {
@@ -254,16 +349,6 @@ function extractFromEvent(obj, textChunks, sessionIdRef) {
           : "";
     if (content) textChunks.push(content);
     return;
-  }
-
-  // OpenAI-style streaming delta: { choices: [{ delta: { role: "assistant", content: "..." } }] }
-  if (Array.isArray(obj.choices)) {
-    for (const choice of obj.choices) {
-      const delta = choice && choice.delta;
-      if (delta && typeof delta.content === "string" && delta.content) {
-        textChunks.push(delta.content);
-      }
-    }
   }
 }
 
@@ -281,6 +366,8 @@ function prepareRunDir(opts, brief) {
     stderrPath: join(outDir, "stderr.txt"),
     resultPath: join(outDir, "result.json"),
   };
+  rmSync(run.finalPath, { force: true });
+  rmSync(run.resultPath, { force: true });
   writeFileSync(run.briefPath, brief, "utf8");
   writeFileSync(run.eventsPath, "", "utf8");
   writeFileSync(run.stderrPath, "", "utf8");
@@ -293,9 +380,12 @@ function makeResultWriter(opts, version, run) {
       schema: "delegate-relay.result.v1",
       tool: "vibe",
       workdir: opts.cd,
-      agent: opts.planOnly ? "plan" : "auto-approve",
+      agent: agentName(opts),
       maxTurns: opts.maxTurns,
+      maxPrice: opts.maxPrice,
+      maxTokens: opts.maxTokens,
       resumed: Boolean(opts.resumeLast || opts.session),
+      sessionId: null,
       vibeVersion: version,
       startedAt: run.startedAt,
       finishedAt: new Date().toISOString(),
@@ -305,19 +395,20 @@ function makeResultWriter(opts, version, run) {
       stderrPath: run.stderrPath,
       ...extra,
     };
-    writeFileSync(run.resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    const temporary = `${run.resultPath}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    renameSync(temporary, run.resultPath);
     return result;
   };
 }
 
-function reportUnavailable(writeResult, resultPath) {
+function reportUnavailable(opts, writeResult, resultPath) {
   const result = writeResult({
     status: "vibe_unavailable",
     exitCode: 127,
     signal: null,
-    sessionId: null,
     finalMessage: "",
-    touchedFiles: null,
+    touchedFiles: gitTouchedFiles(opts.cd),
   });
   printSummary(result, resultPath);
   process.stderr.write(
@@ -326,13 +417,61 @@ function reportUnavailable(writeResult, resultPath) {
   process.exit(127);
 }
 
-function dispatchToVibe(opts, brief, run, writeResult) {
+function reportVersionFailure(opts, writeResult, run, error, timeoutMs) {
+  const timedOut = error?.code === "ETIMEDOUT";
+  const stderr = String(error?.stderr || "").trim();
+  if (stderr) writeFileSync(run.stderrPath, `${stderr}\n`, "utf8");
+  const message = timedOut
+    ? `vibe --version preflight timed out after ${Math.min(timeoutMs, PROBE_TIMEOUT_MS)}ms; Vibe was not dispatched`
+    : `vibe --version preflight failed${Number.isInteger(error?.status) ? ` with exit ${error.status}` : ""}; Vibe was not dispatched`;
+  const result = writeResult({
+    status: timedOut ? "timeout" : "failed",
+    exitCode: timedOut ? 124 : Number.isInteger(error?.status) ? error.status : 1,
+    signal: null,
+    finalMessage: "",
+    touchedFiles: gitTouchedFiles(opts.cd),
+    ...(stderr ? { stderrTail: stderr.split("\n").slice(-20) } : {}),
+    error: message,
+  });
+  printSummary(result, run.resultPath);
+  process.stderr.write(`relay: ${message}\n`);
+  process.exit(result.exitCode);
+}
+
+function installPreflightSignalHandlers(opts, run, writeResult) {
+  let active = true;
+  const handlers = new Map();
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    const handler = () => {
+      if (!active) return;
+      active = false;
+      const result = writeResult({
+        status: "aborted",
+        exitCode: 128 + (constants.signals[sig] || 15),
+        signal: sig,
+        finalMessage: "",
+        touchedFiles: gitTouchedFiles(opts.cd),
+        error: `the relay was killed by ${sig} during the vibe version preflight; Vibe was not dispatched`,
+      });
+      printSummary(result, run.resultPath);
+      process.exit(result.exitCode);
+    };
+    handlers.set(sig, handler);
+    process.on(sig, handler);
+  }
+  return () => {
+    active = false;
+    for (const [sig, handler] of handlers) process.off(sig, handler);
+  };
+}
+
+function dispatchToVibe(opts, brief, run, writeResult, onReady) {
   const child = spawn("vibe", buildArgv(opts, brief), {
     cwd: opts.cd,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
   });
 
-  const sessionIdRef = { value: null };
   const textChunks = [];
   const stderrTail = [];
 
@@ -342,7 +481,7 @@ function dispatchToVibe(opts, brief, run, writeResult) {
   const stdoutDecoder = new StringDecoder("utf8");
   const stderrDecoder = new StringDecoder("utf8");
 
-  const scan = makeLineScanner((obj) => extractFromEvent(obj, textChunks, sessionIdRef));
+  const scan = makeLineScanner((obj) => extractFromEvent(obj, textChunks));
 
   child.stdout.on("data", (chunk) => {
     appendFileSync(run.eventsPath, chunk);
@@ -360,7 +499,7 @@ function dispatchToVibe(opts, brief, run, writeResult) {
   });
 
   const assembleFinal = () => {
-    const message = textChunks.join("\n\n");
+    const message = textChunks.at(-1) || "";
     if (message) writeFileSync(run.finalPath, message, "utf8");
     return message;
   };
@@ -375,22 +514,56 @@ function dispatchToVibe(opts, brief, run, writeResult) {
       child.stdout.destroy();
       child.stderr.destroy();
     });
-    child.kill("SIGTERM");
+    killChild(child);
     sigkillTimer = setTimeout(() => {
-      if (!settled) child.kill("SIGKILL");
+      if (!settled) killChild(child, "SIGKILL");
     }, 10_000);
   }, timeoutMs);
+
+  const clearWatchdog = () => {
+    clearTimeout(watchdogTimer);
+    if (sigkillTimer) clearTimeout(sigkillTimer);
+  };
+
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    process.on(sig, () => {
+      if (settled) return;
+      settled = true;
+      clearWatchdog();
+      const exitCode = 128 + (constants.signals[sig] || 15);
+      let finalized = false;
+      const finishAbort = () => {
+        if (finalized) return;
+        finalized = true;
+        if (sigkillTimer) clearTimeout(sigkillTimer);
+        killChild(child, "SIGKILL");
+        const result = writeResult({
+          status: "aborted",
+          exitCode,
+          signal: sig,
+          finalMessage: assembleFinal(),
+          touchedFiles: gitTouchedFiles(opts.cd),
+          stderrTail: stderrTail.slice(-20),
+          error: `the relay was killed by ${sig}; vibe was terminated with it — inspect the working tree before re-dispatching`,
+        });
+        printSummary(result, run.resultPath);
+        process.exit(exitCode);
+      };
+      child.once("exit", finishAbort);
+      killChild(child);
+      sigkillTimer = setTimeout(finishAbort, 2000);
+    });
+  }
+  onReady();
 
   child.on("error", (err) => {
     if (settled) return;
     settled = true;
-    clearTimeout(watchdogTimer);
-    if (sigkillTimer) clearTimeout(sigkillTimer);
+    clearWatchdog();
     const result = writeResult({
       status: "failed",
       exitCode: 1,
       signal: null,
-      sessionId: sessionIdRef.value,
       finalMessage: assembleFinal(),
       touchedFiles: gitTouchedFiles(opts.cd),
       stderrTail: stderrTail.slice(-20),
@@ -403,18 +576,18 @@ function dispatchToVibe(opts, brief, run, writeResult) {
   child.on("close", (code, signal) => {
     if (settled) return;
     settled = true;
-    clearTimeout(watchdogTimer);
-    if (sigkillTimer) clearTimeout(sigkillTimer);
-    // A timed-out run is failed even if vibe handles SIGTERM by exiting 0 —
-    // orchestrators key off status and the relay exit code.
+    clearWatchdog();
+    if (watchdogFired) killChild(child, "SIGKILL");
+    scan(stdoutDecoder.end());
+    const stderrEnd = stderrDecoder.end();
+    if (stderrEnd.trim()) stderrTail.push(stderrEnd.trimEnd());
     const succeeded = code === 0 && !watchdogFired;
     const mapped = code ?? (constants.signals[signal] ? 128 + constants.signals[signal] : 1);
     const exitCode = succeeded ? 0 : mapped === 0 ? 1 : mapped;
     const result = writeResult({
-      status: succeeded ? "completed" : "failed",
+      status: succeeded ? "completed" : watchdogFired ? "timeout" : "failed",
       exitCode,
       signal: signal ?? null,
-      sessionId: sessionIdRef.value,
       finalMessage: assembleFinal(),
       touchedFiles: gitTouchedFiles(opts.cd),
       ...(succeeded ? {} : { stderrTail: stderrTail.slice(-20) }),
@@ -429,30 +602,40 @@ function dispatchToVibe(opts, brief, run, writeResult) {
   });
 }
 
-function main() {
+async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const brief = readBrief(opts);
   if (!brief.trim()) fail("empty brief (pass --brief <file> or pipe the brief on stdin)");
+  if (brief.includes("\0")) fail("brief contains a NUL byte, which cannot be passed in --prompt");
 
   // vibe --prompt takes the prompt as a CLI argument, so the brief rides argv.
-  // The OS caps one argument (~128KB on Linux via MAX_ARG_STRLEN); reject a
-  // huge brief early instead of allowing an opaque E2BIG spawn failure.
+  // The OS caps command arguments; reject a huge brief before an opaque spawn
+  // failure (Windows has the smaller limit).
   const briefBytes = Buffer.byteLength(brief, "utf8");
-  const MAX_BRIEF_BYTES = 120 * 1024;
   if (briefBytes > MAX_BRIEF_BYTES) {
     fail(
-      `brief is ${Math.round(briefBytes / 1024)}KB; vibe passes the prompt as a CLI argument, which the OS caps (~128KB on Linux). Trim it, or have vibe read large context from the workspace instead of inlining it.`,
+      `brief is ${Math.round(briefBytes / 1024)}KB; keep large context in workspace files instead of argv`,
     );
   }
 
-  const version = vibeVersion();
   const run = prepareRunDir(opts, brief);
-  const writeResult = makeResultWriter(opts, version, run);
-  if (!version) {
-    reportUnavailable(writeResult, run.resultPath);
-    return;
+  const timeoutMs = parseDuration(opts.timeout) ?? parseDuration(DEFAULT_TIMEOUT);
+  let writeResult = makeResultWriter(opts, null, run);
+  const clearPreflightSignals = installPreflightSignalHandlers(opts, run, writeResult);
+  const probe = vibeVersion(timeoutMs);
+  // execFileSync defers JS signal handlers; yield once so a signal received
+  // during the bounded preflight becomes "aborted" before any dispatch.
+  await new Promise((resolve) => setImmediate(resolve));
+  writeResult = makeResultWriter(opts, probe.version, run);
+  if (!probe.version && !probe.error) {
+    clearPreflightSignals();
+    return reportUnavailable(opts, writeResult, run.resultPath);
   }
-  dispatchToVibe(opts, brief, run, writeResult);
+  if (probe.error) {
+    clearPreflightSignals();
+    return reportVersionFailure(opts, writeResult, run, probe.error, timeoutMs);
+  }
+  dispatchToVibe(opts, brief, run, writeResult, clearPreflightSignals);
 }
 
 function printSummary(result, resultPath) {
@@ -461,15 +644,17 @@ function printSummary(result, resultPath) {
   lines.push(
     `relay: ${result.status} (exit ${result.exitCode}${result.signal ? `, killed by ${result.signal}` : ""})  ·  vibe ${result.vibeVersion ?? "?"}`,
   );
-  if (result.signal === "SIGKILL") {
+  if (result.signal === "SIGKILL" && result.status === "failed") {
     lines.push(
       "hint: the host killed the process (commonly the OOM killer or a supervisor timeout) — this is not a vibe error; check host memory and re-dispatch, or split the task into smaller briefs.",
     );
   }
-  if (result.resumed) lines.push("mode: resumed an existing session");
-  if (result.sessionId) {
-    lines.push(`session id (resume with: --session ${result.sessionId}): ${result.sessionId}`);
+  if (result.signal === "SIGTERM" && result.status === "failed") {
+    lines.push(
+      "hint: something outside the relay terminated vibe; relay watchdogs and relay signals report timeout or aborted instead.",
+    );
   }
+  if (result.resumed) lines.push("mode: resumed an existing session");
   const touched = result.touchedFiles;
   if (touched === null) {
     lines.push("touched files: git unavailable - inspect the working tree directly");

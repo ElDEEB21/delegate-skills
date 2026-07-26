@@ -24,8 +24,9 @@ default because it preserves clean task boundaries.
 Fresh Vibe sessions do not remember earlier tasks. If task 2 chooses a helper name, fixture location,
 or interface that task 5 needs, write that fact into task 5's brief.
 
-Use a resumed Vibe session only for rework on the same task. Send a delta brief with `--resume-last`,
-or with `--session <id>` from that task's `result.json`. Start unrelated queue items in fresh sessions.
+Use a resumed Vibe session only for rework on the same task. Send a delta brief with `--resume-last`;
+use `--session <id>` only for an id obtained outside the relay because Vibe's stream does not expose
+one. Start unrelated queue items in fresh sessions.
 
 ## Keep a progress file
 

@@ -41,6 +41,7 @@ Options:
 | `--full-access` | Unrestricted auto-approve (`--always-approve --sandbox off`); opt-in. |
 | `--resume-last` | Continue the most recent Grok session for this cwd; send only the delta brief. |
 | `--session <id>` | Continue a specific session id; mutually exclusive with `--resume-last`. |
+| `--timeout <dur>` | Relay-side watchdog (e.g. `30m`, `2h`); on expiry the child is killed and `result.json` gets `status: "timeout"`. Off by default. |
 | `--out-dir <dir>` | Where artifacts go (default: a fresh dir under the system temp dir). |
 
 Default autonomy (neither `--read-only` nor `--full-access`) is **workspace-write**:
@@ -56,8 +57,8 @@ touched-files report shows only Grok's edits and nothing of the helper's own.
 
 - `schema` — the result-format version (currently `delegate-relay.result.v1`)
 - `tool` — `"grok"`
-- `status` — `completed` | `failed` | `grok_unavailable`
-- `exitCode` — mirrors Grok's exit code; `128` plus the signal number if the child was killed; `127` if `grok` isn't on PATH
+- `status` — `completed` | `failed` | `timeout` | `aborted` | `grok_unavailable`
+- `exitCode` — mirrors Grok's exit code; `128` plus the signal number if the child was killed; `127` if `grok` isn't on PATH; on a `timeout` the relay forces a non-zero code even when the child exited `0` after the watchdog's SIGTERM
 - `signal` — the signal that killed the child, otherwise `null`
 - `grokVersion` — the binary that actually ran
 - `sessionId` — feed this to a later `--session <id>` (or use `--resume-last`)
@@ -70,8 +71,8 @@ touched-files report shows only Grok's edits and nothing of the helper's own.
   between dispatch and completion, i.e. the best-effort read-only was not honored. A porcelain-level
   tripwire: it catches new dirt, but an edit inside an already-dirty file can evade it — the diff
   review, not this flag, is the guarantee
-- `stderrTail` — last ~20 stderr lines; present **only** on a failed run (a non-zero Grok exit), absent on `completed`, `grok_unavailable`, and launch failures
-- `error` — present **only** if Grok failed to launch
+- `stderrTail` — last ~20 stderr lines; present on every run that did not complete (`failed`, `timeout`, `aborted`), absent on `completed`, `grok_unavailable`, and launch failures
+- `error` — present on a launch failure, and on `timeout` and `aborted` runs
 
 The helper also prints a summary to stdout and exits with Grok's exit code, so a wrapping script can
 branch on success/failure directly.
@@ -96,6 +97,15 @@ process has exited and `result.json` is written — not when a status line says 
 
 - **`status: grok_unavailable` (exit 127):** `grok` isn't on PATH or isn't found. Install with
   `npm i -g @xai-official/grok` and `grok login`, then re-dispatch.
+- **`status: timeout`:** the `--timeout` watchdog killed the run. The working tree may hold a
+  half-applied change — inspect it before deciding between a longer `--timeout`, a smaller brief,
+  or a resume.
+- **`status: aborted`:** the relay itself was killed (its parent's timeout, a stopped task, a
+  closed terminal) and forwarded the kill to grok. The result is written before the relay exits;
+  inspect the working tree before re-dispatching. On native Windows a hard kill of the relay is
+  uncatchable (Node supports no `SIGTERM` handler there), so this status may never get written -
+  a relay process that is gone without a `result.json` is an aborted run; inspect the working
+  tree and `events.jsonl` directly.
 - **`status: failed` with `signal: "SIGKILL"`:** the host ended the child — commonly the OOM killer
   or a supervisor timeout, not an implementer error. Free up host memory or split the task into
   smaller briefs, then re-dispatch.
@@ -106,6 +116,15 @@ process has exited and `result.json` is written — not when a status line says 
 - **Empty `finalMessage`:** Grok exited before producing a final message, or the streaming-json event
   shape didn't match the extractor. Treat as a failed run; the events log usually shows where it
   stopped — and is the source of truth for tightening the parser.
+
+## Recovering lost work
+
+`events.jsonl` in the run directory records every event the implementer streamed. If finished
+work is lost — the run killed late, or the working tree damaged afterward — read the event log
+before re-dispatching: it identifies which files and tool commands were involved, which scopes
+what needs redoing. Whether it also carries the edit contents depends on what the CLI streams,
+so treat any reconstruction as unverified until it matches a working-tree diff — when the tree
+still holds the work, preserve the tree rather than replaying the log.
 
 ## What the helper is doing (and the alternatives)
 

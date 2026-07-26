@@ -24,13 +24,11 @@ The loop needs only a shell command and file access, so any comparable orchestra
 
 - The task is small enough to do inline; delegation overhead is not worth it.
 - The `vibe` CLI is not installed or authenticated.
-- You need a CLI-enforced read-only implementer. Vibe's `plan` agent is best-effort read-only only.
 
 ## Prerequisites (check once)
 
 1. Install Mistral Vibe:
-   - **Linux/macOS (recommended):** `curl -LsSf https://mistral.ai/vibe/install.sh | bash`
-   - **With uv:** `uv tool install mistral-vibe`
+   - `uv tool install mistral-vibe`
 2. Configure your API key with `vibe --setup`, or set `MISTRAL_API_KEY` in the environment.
 3. Confirm `vibe --version` succeeds.
 4. Work in, or point `--cd` at, the target git repository.
@@ -46,6 +44,9 @@ context. Include the goal, current state, what to change, what to leave untouche
 **actual** gates, and a report contract. Tell Vibe not to commit. Keep one task per brief. See
 [references/writing-the-brief.md](references/writing-the-brief.md).
 
+Default mode cannot approve most shell commands headlessly, so the orchestrator runs the gates. Ask
+Vibe to run them only when the human explicitly authorized `--full-access`.
+
 ### 2. Dispatch
 
 Use the bundled helper. It wraps Vibe's headless `--prompt` mode, captures the structured event
@@ -54,7 +55,9 @@ stream, and writes `result.json`. (`<skill-dir>` is the installed folder contain
 ```bash
 node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 # limit turns for cost control:           add --max-turns <n>
-# planning/read-only (best-effort):       add --plan-only
+# cap price or total tokens:              add --max-price <usd> --max-tokens <n>
+# planning/read-only:                     add --plan-only
+# unrestricted shell and tools:           add --full-access (explicit authorization required)
 # resume the most recent session:         add --resume-last  (delta brief only)
 # resume a specific session:              add --session <id> (delta brief only)
 # see all options:                        node .../relay.mjs --help
@@ -68,6 +71,8 @@ default and never commits. See [references/dispatch-and-poll.md](references/disp
 The helper blocks until Vibe finishes. Run it with the orchestrator's background-command facility, or
 background it in the shell and poll for `result.json`. A pre-run usage error exits 2 and writes no
 result; a missing `vibe` exits 127 and writes `status: "vibe_unavailable"`.
+The watchdog writes `status: "timeout"`; terminating the relay on POSIX writes `status: "aborted"`
+after stopping Vibe's process tree.
 
 Trust process state and the working tree over a progress display. Completion means the process exited
 and `result.json` exists.
@@ -95,14 +100,18 @@ In `--prompt` mode the relay always sets the agent profile explicitly:
 
 | Relay flag | What Vibe gets | Use when |
 | --- | --- | --- |
-| *(default)* | `--agent auto-approve` | Normal implementation — auto-approves all tool executions |
-| `--plan-only` | `--agent plan` | Review/diagnosis — **best-effort, not enforced** |
+| *(default)* | `--agent accept-edits` | Normal implementation — built-in file edits are approved |
+| `--plan-only` | `--agent plan` | Read-only review, exploration, or planning |
+| `--full-access` | `--agent auto-approve` | Explicitly authorized runs that need arbitrary shell/tools |
 
-The `plan` agent auto-approves only safe read tools (e.g. `grep`, `read`). Write tools require
-approval, which will not happen in headless mode — so the agent should not attempt them. Still,
-inspect `touchedFiles` and the diff after every run. The diff, not a flag, is the guarantee.
+Default mode lets Vibe edit files inside the target worktree. Approval-gated shell commands,
+including most project gates, are denied headlessly; the orchestrator runs the gates.
+`--full-access` disables Vibe's tool approvals and permits arbitrary shell/tool execution under the
+user account; use it only with explicit human authorization. Always inspect `touchedFiles` and the
+diff after a run.
 
-`--trust` is always passed to prevent interactive trust prompts in headless runs.
+`--trust` is always passed to prevent interactive directory-trust prompts in headless runs. It is
+not a sandbox and does not grant tool permissions.
 
 ## Authorization model
 
