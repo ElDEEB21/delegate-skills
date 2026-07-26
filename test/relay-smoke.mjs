@@ -89,6 +89,10 @@ if (args.includes("--version") || args[0] === "version" || args[0] === "changelo
   console.log("fake-cli 0.0.0-smoke");
   process.exit(0);
 }
+if (process.env.SMOKE_MODE === "capture") {
+  fs.writeFileSync(process.env.SMOKE_ARGS_FILE, JSON.stringify(args));
+  process.exit(0);
+}
 if (["claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
   let brief = "";
   process.stdin.setEncoding("utf8");
@@ -227,6 +231,23 @@ const runRelay = (skill, workDir, outDir, extraArgs, extraEnv) =>
   });
 
 const result = (outDir) => JSON.parse(readFileSync(join(outDir, "result.json"), "utf8"));
+
+// ---- codex effort is validated, forwarded, and recorded ----
+const effortOutDir = join(scratch, "out-effort-codex");
+const effortArgsFile = join(scratch, "args-effort-codex");
+const effortWorkDir = freshRepo("work-effort-codex");
+const effortRun = spawnSync(process.execPath,
+  [relayPath("codex"), "--brief", briefPath, "--cd", effortWorkDir, "--out-dir", effortOutDir, "--effort", "low"],
+  { env: { ...baseEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: effortArgsFile }, encoding: "utf8" });
+const effortArgs = existsSync(effortArgsFile) ? JSON.parse(readFileSync(effortArgsFile, "utf8")) : [];
+check("codex effort: forwarded as a config override",
+  effortRun.status === 0 && effortArgs.includes("-c") && effortArgs[effortArgs.indexOf("-c") + 1] === "model_reasoning_effort=low");
+check("codex effort: recorded in result.json",
+  existsSync(join(effortOutDir, "result.json")) && result(effortOutDir).effort === "low");
+const emptyEffortRun = spawnSync(process.execPath,
+  [relayPath("codex"), "--brief", briefPath, "--effort", ""],
+  { env: baseEnv, encoding: "utf8" });
+check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 
 // opencode refuses a fresh run without an explicit model
 const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [] };

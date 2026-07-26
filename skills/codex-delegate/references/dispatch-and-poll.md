@@ -35,6 +35,7 @@ Options:
 | `--brief <file>` | The brief. Omit it to read the brief from stdin (`node relay.mjs … < brief.txt`). |
 | `--cd <dir>` | Working root for Codex (default: current directory). |
 | `--model <name>` | Codex model (default: Codex's own configured default). |
+| `--effort <level>` | Reasoning effort, passed to Codex as `-c model_reasoning_effort=<level>` (default: Codex's own configured default). The relay accepts a bare token; Codex and the model own the supported levels. Applies to fresh and resumed runs. |
 | `--sandbox <mode>` | `read-only` \| `workspace-write` \| `danger-full-access` (default: `workspace-write`). |
 | `--read-only` | Shortcut for `--sandbox read-only` — review/diagnosis with no edits. |
 | `--resume-last` | Continue the most recent Codex session; send only the delta brief (see review-and-land). |
@@ -58,7 +59,7 @@ touched-files report shows only Codex's edits and nothing of the helper's own.
 - `finalMessage` — Codex's own final report (the `<structured_output_contract>` you asked for)
 - `touchedFiles` — `git status --porcelain` lines in the working root: your review starting point. `null` (not `[]`) when git can't report — `git` missing, or a non-repo run under `--skip-git-repo-check`; `[]` means git ran and the tree is clean
 - `briefPath` / `eventsPath` / `finalPath` — the exact brief relay sent, the raw JSONL event stream, and the final-message file
-- `workdir`, `sandbox`, `model`, `resumeLast`, `startedAt`, `finishedAt`
+- `workdir`, `sandbox`, `model`, `effort`, `resumeLast`, `startedAt`, `finishedAt`
 - `stderrTail` — last ~20 stderr lines; present on every run that did not complete (`failed`, `timeout`, `aborted`), absent on `completed`, `codex_unavailable`, and launch failures
 - `error` — present on a launch failure, and on `timeout` and `aborted` runs
 
@@ -86,9 +87,9 @@ process has exited and `result.json` is written — not when a status line says 
 - **`status: codex_unavailable` (exit 127):** `codex` isn't on PATH or isn't found. Install
   (`npm i -g @openai/codex`) and `codex login`, then re-dispatch.
 - **`status: failed`:** read `result.json`'s `stderrTail` and the tail of `eventsPath` for the cause.
-  Common causes: an auth lapse, an invalid `--model`, or a sandbox that blocked something the task
-  needed. Fix the cause and re-dispatch; don't paper over it by doing the work yourself unless that's
-  what the user wants.
+  Common causes: an auth lapse, an invalid `--model` or unsupported `--effort`, or a sandbox that
+  blocked something the task needed. Fix the cause and re-dispatch; don't paper over it by doing the
+  work yourself unless that's what the user wants.
 - **`status: timeout`:** the `--timeout` watchdog killed the run. The working tree may hold a
   half-applied change — inspect it before deciding between a longer `--timeout`, a smaller brief,
   or a resume.
@@ -119,8 +120,8 @@ what was lost.
 Under the hood the helper runs roughly:
 
 ```bash
-codex exec --json -o <final.txt> -s workspace-write [-m model] - < brief.txt   # fresh run
-codex exec resume --last --json -o <final.txt> - < delta-brief.txt            # resume (no -s/-C)
+codex exec --json -o <final.txt> -s workspace-write [-m model] [-c model_reasoning_effort=<level>] - < brief.txt   # fresh run
+codex exec resume --last --json -o <final.txt> [-m model] [-c model_reasoning_effort=<level>] - < delta-brief.txt  # resume (no -s/-C)
 ```
 
 `resume` deliberately gets no `-s`/`-C` — it inherits the original session's sandbox and working root —
