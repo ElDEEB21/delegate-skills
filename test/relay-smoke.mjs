@@ -51,6 +51,7 @@ const check = (name, cond) => {
   console.log(`${cond ? "  ok " : "  FAIL"}  ${name}`);
   if (!cond) failed++;
 };
+const pair = (args, flag, value) => args[args.indexOf(flag) + 1] === value;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn, ms) => {
   const end = Date.now() + ms;
@@ -88,33 +89,50 @@ if (args.includes("--version") || args[0] === "version" || args[0] === "changelo
   console.log("fake-cli 0.0.0-smoke");
   process.exit(0);
 }
-if (process.env.SMOKE_MODE === "claude-success") {
+if (["claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
   let brief = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => { brief += chunk; });
-  process.stdin.on("end", () => {
-    fs.writeFileSync(process.env.SMOKE_CAPTURE_FILE, JSON.stringify({
-      args,
-      brief,
-      claudeCode: process.env.CLAUDECODE ?? null,
-      childSession: process.env.CLAUDE_CODE_CHILD_SESSION ?? null,
-    }));
+  process.stdin.on("end", async () => {
+    const mode = process.env.SMOKE_MODE;
+    if (mode === "claude-read-only-write") {
+      fs.writeFileSync("read-only-violation.txt", "written by fake claude\\n");
+    }
+    if (process.env.SMOKE_CAPTURE_FILE) {
+      fs.writeFileSync(process.env.SMOKE_CAPTURE_FILE, JSON.stringify({
+        args,
+        brief,
+        claudeCode: process.env.CLAUDECODE ?? null,
+        childSession: process.env.CLAUDE_CODE_CHILD_SESSION ?? null,
+      }));
+    }
+    const permissionMode = mode.startsWith("claude-read-only") ? "plan" : "acceptEdits";
     console.log(JSON.stringify({
       type: "system",
       subtype: "init",
       session_id: "11111111-1111-4111-8111-111111111111",
-      permissionMode: "acceptEdits",
+      permissionMode,
     }));
-    console.log(JSON.stringify({
+    const resultEvent = {
       type: "result",
       subtype: "success",
       is_error: false,
       session_id: "11111111-1111-4111-8111-111111111111",
-      result: "fake claude completed",
+      result: mode === "claude-chunked" ? "café — done ✅" : "fake claude completed",
       num_turns: 3,
       total_cost_usd: 0.0123,
       usage: { input_tokens: 10, output_tokens: 5 },
-    }));
+    };
+    if (mode === "claude-chunked") {
+      const output = Buffer.from(JSON.stringify(resultEvent));
+      for (let i = 0; i < output.length; i += 1) {
+        process.stdout.write(output.subarray(i, i + 1));
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      process.stdout.write("\\n");
+    } else {
+      console.log(JSON.stringify(resultEvent));
+    }
   });
 } else {
   process.stdin.resume();
@@ -226,10 +244,17 @@ const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"],
   });
   let stderr = "";
   child.stderr.on("data", (data) => { stderr += data; });
-  const exitCode = await new Promise((resolveExit) => {
-    child.on("close", resolveExit);
+  let exitCode = null;
+  const exited = await new Promise((resolveExit) => {
+    const timer = setTimeout(() => resolveExit(false), 15_000);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      exitCode = code;
+      resolveExit(true);
+    });
   });
   check("claude success: relay exits zero", exitCode === 0);
+  check("claude success: relay close wait did not time out", exited);
   check("claude success: result.json exists", existsSync(join(outDir, "result.json")));
   check("claude success: fake captured the launch", existsSync(captureFile));
   if (existsSync(join(outDir, "result.json"))) {
@@ -248,16 +273,132 @@ const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"],
     check("claude success: child-session marker preserved", capture.childSession === "1");
     check("claude success: print stream-json launch selected",
       capture.args.includes("-p") &&
-      capture.args.includes("stream-json") &&
+      pair(capture.args, "--output-format", "stream-json") &&
       capture.args.includes("--verbose"));
     check("claude success: normal permission profile selected",
-      capture.args.includes("--permission-mode") &&
-      capture.args.includes("acceptEdits"));
+      pair(capture.args, "--permission-mode", "acceptEdits"));
     check("claude success: forbidden modes omitted",
       !capture.args.includes("--bg") &&
       !capture.args.includes("--bare"));
+    check("claude success: normal tool surface selected",
+      pair(capture.args, "--tools", `Read,Glob,Grep,Edit,Write,${WIN ? "PowerShell" : "Bash"}`));
+    check("claude success: all MCP tools disallowed",
+      pair(capture.args, "--disallowedTools", "mcp__*"));
+    check("claude success: generated profile selected",
+      pair(capture.args, "--settings", join(outDir, "profile.json")));
+    check("claude success: restriction flags selected",
+      capture.args.includes("--strict-mcp-config") &&
+      capture.args.includes("--disable-slash-commands"));
+
+    const settingsPath = capture.args[capture.args.indexOf("--settings") + 1];
+    check("claude success: generated profile exists", Boolean(settingsPath) && existsSync(settingsPath));
+    if (settingsPath && existsSync(settingsPath)) {
+      const profile = JSON.parse(readFileSync(settingsPath, "utf8"));
+      const shell = WIN ? "PowerShell" : "Bash";
+      const expectedDeny = [
+        `${shell}(git commit *)`,
+        `${shell}(git * commit *)`,
+        `${shell}(git * commit)`,
+        `${shell}(git push *)`,
+        `${shell}(git * push *)`,
+        `${shell}(git * push)`,
+        `${shell}(claude *)`,
+        `${shell}(*claude-delegate*)`,
+      ];
+      check("claude success: Claude.ai connectors disabled",
+        profile.disableClaudeAiConnectors === true);
+      check("claude success: deny rules match the write profile",
+        JSON.stringify(profile.permissions?.deny) === JSON.stringify(expectedDeny));
+      if (WIN) {
+        check("claude success: native Windows profile omits the sandbox",
+          !Object.prototype.hasOwnProperty.call(profile, "sandbox"));
+        check("claude success: native Windows profile enables PowerShell",
+          profile.env?.CLAUDE_CODE_USE_POWERSHELL_TOOL === "1");
+      } else {
+        check("claude success: POSIX sandbox is strict",
+          profile.sandbox?.enabled === true &&
+          profile.sandbox?.failIfUnavailable === true &&
+          profile.sandbox?.autoAllowBashIfSandboxed === true &&
+          profile.sandbox?.allowUnsandboxedCommands === false);
+      }
+    }
   }
   if (exitCode !== 0) console.error(`claude success relay stderr:\n${stderr}`);
+}
+
+// ---- Claude's read-only profile and git-porcelain tripwire ----
+for (const scenario of [
+  { name: "violation", mode: "claude-read-only-write", expectedViolation: true },
+  { name: "clean", mode: "claude-read-only-clean", expectedViolation: false },
+]) {
+  const outDir = join(scratch, `out read-only ${scenario.name} claude`);
+  const workDir = freshRepo(`work read-only ${scenario.name} claude`);
+  const captureFile = join(scratch, `capture-read-only-${scenario.name}-claude.json`);
+  const child = runRelay("claude", workDir, outDir, ["--read-only"], {
+    SMOKE_CAPTURE_FILE: captureFile,
+    SMOKE_MODE: scenario.mode,
+  });
+  let stderr = "";
+  child.stderr.on("data", (data) => { stderr += data; });
+  let exitCode = null;
+  const exited = await new Promise((resolveExit) => {
+    const timer = setTimeout(() => resolveExit(false), 15_000);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      exitCode = code;
+      resolveExit(true);
+    });
+  });
+  check(`claude read-only ${scenario.name}: relay close wait did not time out`, exited);
+  check(`claude read-only ${scenario.name}: relay exits zero`, exitCode === 0);
+  check(`claude read-only ${scenario.name}: result.json exists`, existsSync(join(outDir, "result.json")));
+  check(`claude read-only ${scenario.name}: fake captured the launch`, existsSync(captureFile));
+  if (existsSync(join(outDir, "result.json"))) {
+    const value = result(outDir);
+    check(`claude read-only ${scenario.name}: violation result is ${scenario.expectedViolation}`,
+      value.readOnlyViolation === scenario.expectedViolation);
+    check(`claude read-only ${scenario.name}: tool surface is read-only`,
+      JSON.stringify(value.toolSurface) === JSON.stringify(["Read", "Glob", "Grep"]));
+    check(`claude read-only ${scenario.name}: permission mode is plan`,
+      value.permissionMode === "plan");
+  }
+  if (existsSync(captureFile)) {
+    const capture = JSON.parse(readFileSync(captureFile, "utf8"));
+    const tools = capture.args[capture.args.indexOf("--tools") + 1] ?? "";
+    check(`claude read-only ${scenario.name}: plan mode selected`,
+      pair(capture.args, "--permission-mode", "plan"));
+    check(`claude read-only ${scenario.name}: read-only tools selected`,
+      pair(capture.args, "--tools", "Read,Glob,Grep"));
+    check(`claude read-only ${scenario.name}: write and shell tools omitted`,
+      !["Edit", "Write", "Bash", "PowerShell"].some((tool) => tools.split(",").includes(tool)));
+  }
+  if (exitCode !== 0) console.error(`claude read-only ${scenario.name} relay stderr:\n${stderr}`);
+}
+
+// ---- Claude's stream parser preserves chunked multi-byte output ----
+{
+  const outDir = join(scratch, "out chunked claude");
+  const workDir = freshRepo("work chunked claude");
+  const child = runRelay("claude", workDir, outDir, [], { SMOKE_MODE: "claude-chunked" });
+  let stderr = "";
+  child.stderr.on("data", (data) => { stderr += data; });
+  let exitCode = null;
+  const exited = await new Promise((resolveExit) => {
+    const timer = setTimeout(() => resolveExit(false), 20_000);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      exitCode = code;
+      resolveExit(true);
+    });
+  });
+  check("claude chunked: relay close wait did not time out", exited);
+  check("claude chunked: relay exits zero", exitCode === 0);
+  check("claude chunked: result.json exists", existsSync(join(outDir, "result.json")));
+  if (existsSync(join(outDir, "result.json"))) {
+    check("claude chunked: multi-byte final message round-trips",
+      result(outDir).finalMessage === "café — done ✅");
+  }
+  if (exitCode !== 0) console.error(`claude chunked relay stderr:\n${stderr}`);
 }
 
 // ---- 1. the watchdog fells the whole tree ----
