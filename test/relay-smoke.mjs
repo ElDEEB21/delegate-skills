@@ -7,11 +7,12 @@
  * not complete:
  *
  *   1. timeout  — the watchdog kills the implementer's WHOLE process tree and
- *                 result.json reports status "timeout". Driven for all five
- *                 relays on both platforms. On Windows, codex/opencode/grok
- *                 launch a .cmd shim via shell:true (exactly the case a plain
- *                 child.kill would miss), while agy and kimi spawn a native
- *                 binary directly — a .cmd stand-in can never represent them,
+ *                 result.json reports status "timeout". Driven for all six
+ *                 relays on both platforms. On Windows, claude launches a .cmd
+ *                 shim through a serialized cmd.exe invocation, while
+ *                 codex/opencode/grok use shell:true. These are exactly the
+ *                 cases a plain child.kill would miss; agy and kimi spawn a
+ *                 native binary directly — a .cmd stand-in cannot represent them,
  *                 so the smoke compiles a real fake .exe with the C# compiler
  *                 that ships in-box with Windows (no install, no network) and
  *                 puts it on PATH under their names. agy's watchdog is
@@ -24,15 +25,15 @@
  *   2. aborted  — killing the relay itself still produces result.json with
  *                 status "aborted", and files the implementer flushes during
  *                 the shutdown grace window appear in the refreshed
- *                 touchedFiles. Driven for all five relays on POSIX; Windows
+ *                 touchedFiles. Driven for all six relays on POSIX; Windows
  *                 delivers no catchable SIGTERM, so the scenario cannot be
  *                 driven there (the skill docs carry the same caveat).
  *
  * Every fake answers each relay's version preflight (--version, `version`,
- * `changelog`) and otherwise runs until killed. It also spawns a subprocess of
- * its own, and both scenarios assert that this grandchild dies with it — the
- * relays' kill must fell the whole process family (a process-group signal on
- * POSIX, taskkill /t on Windows), not just the pid they launched.
+ * `changelog`). A quick Claude success case verifies stdin delivery, launch
+ * arguments, nested-environment filtering, and result-event parsing. The
+ * timeout/abort cases otherwise run until killed and spawn a subprocess of
+ * their own; both assert that this grandchild dies with the implementer.
  * Node built-ins only.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -42,7 +43,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SKILLS = ["codex", "opencode", "agy", "grok", "kimi"];
+const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi"];
 const relayPath = (skill) => join(here, "..", "skills", `${skill}-delegate`, "scripts", "relay.mjs");
 const WIN = process.platform === "win32";
 let failed = 0;
@@ -87,21 +88,51 @@ if (args.includes("--version") || args[0] === "version" || args[0] === "changelo
   console.log("fake-cli 0.0.0-smoke");
   process.exit(0);
 }
-process.stdin.resume();
-const grandProgram = process.env.SMOKE_GRAND_IGNORES_SIGTERM
-  ? "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"
-  : "setInterval(() => {}, 1000)";
-const grand = require("node:child_process").spawn(process.execPath, ["-e", grandProgram], { stdio: "ignore" });
-fs.writeFileSync(process.env.SMOKE_GRAND_PID_FILE, String(grand.pid));
-fs.writeFileSync(process.env.SMOKE_PID_FILE, String(process.pid)); // written last: its existence means both pid files are readable
-if (process.env.SMOKE_MODE === "abort") {
-  process.on("SIGTERM", () => { fs.writeFileSync(process.env.SMOKE_LATE_FILE, "flushed during shutdown"); process.exit(0); });
-} else if (process.env.SMOKE_MODE === "timeout-yield") {
-  process.on("SIGTERM", () => process.exit(0)); // the parent complies while the grandchild ignores
+if (process.env.SMOKE_MODE === "claude-success") {
+  let brief = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => { brief += chunk; });
+  process.stdin.on("end", () => {
+    fs.writeFileSync(process.env.SMOKE_CAPTURE_FILE, JSON.stringify({
+      args,
+      brief,
+      claudeCode: process.env.CLAUDECODE ?? null,
+      childSession: process.env.CLAUDE_CODE_CHILD_SESSION ?? null,
+    }));
+    console.log(JSON.stringify({
+      type: "system",
+      subtype: "init",
+      session_id: "11111111-1111-4111-8111-111111111111",
+      permissionMode: "acceptEdits",
+    }));
+    console.log(JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      session_id: "11111111-1111-4111-8111-111111111111",
+      result: "fake claude completed",
+      num_turns: 3,
+      total_cost_usd: 0.0123,
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }));
+  });
 } else {
-  process.on("SIGTERM", () => {}); // ignore, so the relay's SIGKILL escalation is what ends it
+  process.stdin.resume();
+  const grandProgram = process.env.SMOKE_GRAND_IGNORES_SIGTERM
+    ? "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"
+    : "setInterval(() => {}, 1000)";
+  const grand = require("node:child_process").spawn(process.execPath, ["-e", grandProgram], { stdio: "ignore" });
+  fs.writeFileSync(process.env.SMOKE_GRAND_PID_FILE, String(grand.pid));
+  fs.writeFileSync(process.env.SMOKE_PID_FILE, String(process.pid)); // written last: its existence means both pid files are readable
+  if (process.env.SMOKE_MODE === "abort") {
+    process.on("SIGTERM", () => { fs.writeFileSync(process.env.SMOKE_LATE_FILE, "flushed during shutdown"); process.exit(0); });
+  } else if (process.env.SMOKE_MODE === "timeout-yield") {
+    process.on("SIGTERM", () => process.exit(0)); // the parent complies while the grandchild ignores
+  } else {
+    process.on("SIGTERM", () => {}); // ignore, so the relay's SIGKILL escalation is what ends it
+  }
+  setInterval(() => {}, 1000);
 }
-setInterval(() => {}, 1000);
 `;
 
 // agy and kimi spawn a native binary without a shell, so on Windows their stand-in must be a
@@ -136,7 +167,7 @@ const shimDir = join(scratch, "shim");
 mkdirSync(shimDir);
 writeFileSync(join(shimDir, "fake-cli.cjs"), FAKE);
 if (WIN) {
-  for (const skill of ["codex", "opencode", "grok"]) {
+  for (const skill of ["claude", "codex", "opencode", "grok"]) {
     writeFileSync(join(shimDir, `${skill}.cmd`), `@node "%~dp0fake-cli.cjs" %*\r\n`);
   }
   const windir = process.env.WINDIR || "C:\\Windows";
@@ -180,12 +211,60 @@ const runRelay = (skill, workDir, outDir, extraArgs, extraEnv) =>
 const result = (outDir) => JSON.parse(readFileSync(join(outDir, "result.json"), "utf8"));
 
 // opencode refuses a fresh run without an explicit model
-const EXTRA_ARGS = { codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [] };
+const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [] };
+
+// ---- Claude's completed stream contract and nested launch environment ----
+{
+  const outDir = join(scratch, "out success claude");
+  const workDir = freshRepo("work success claude");
+  const captureFile = join(scratch, "capture-success-claude.json");
+  const child = runRelay("claude", workDir, outDir, [], {
+    CLAUDECODE: "1",
+    CLAUDE_CODE_CHILD_SESSION: "1",
+    SMOKE_CAPTURE_FILE: captureFile,
+    SMOKE_MODE: "claude-success",
+  });
+  let stderr = "";
+  child.stderr.on("data", (data) => { stderr += data; });
+  const exitCode = await new Promise((resolveExit) => {
+    child.on("close", resolveExit);
+  });
+  check("claude success: relay exits zero", exitCode === 0);
+  check("claude success: result.json exists", existsSync(join(outDir, "result.json")));
+  check("claude success: fake captured the launch", existsSync(captureFile));
+  if (existsSync(join(outDir, "result.json"))) {
+    const value = result(outDir);
+    check(`claude success: status is completed (got ${value.status})`, value.status === "completed");
+    check("claude success: session id parsed", value.sessionId === "11111111-1111-4111-8111-111111111111");
+    check("claude success: final message parsed", value.finalMessage === "fake claude completed");
+    check("claude success: result subtype parsed", value.resultSubtype === "success");
+    check("claude success: turns and cost parsed", value.numTurns === 3 && value.totalCostUsd === 0.0123);
+    check("claude success: token usage parsed", value.usage?.input_tokens === 10 && value.usage?.output_tokens === 5);
+  }
+  if (existsSync(captureFile)) {
+    const capture = JSON.parse(readFileSync(captureFile, "utf8"));
+    check("claude success: brief delivered through stdin", capture.brief === "smoke brief: run until killed.");
+    check("claude success: inherited CLAUDECODE removed", capture.claudeCode === null);
+    check("claude success: child-session marker preserved", capture.childSession === "1");
+    check("claude success: print stream-json launch selected",
+      capture.args.includes("-p") &&
+      capture.args.includes("stream-json") &&
+      capture.args.includes("--verbose"));
+    check("claude success: normal permission profile selected",
+      capture.args.includes("--permission-mode") &&
+      capture.args.includes("acceptEdits"));
+    check("claude success: forbidden modes omitted",
+      !capture.args.includes("--bg") &&
+      !capture.args.includes("--bare"));
+  }
+  if (exitCode !== 0) console.error(`claude success relay stderr:\n${stderr}`);
+}
 
 // ---- 1. the watchdog fells the whole tree ----
 // agy's watchdog flag is --print-timeout, and it always adds a fixed 60s grace on top,
 // so its run needs about a minute wherever it executes.
 const TIMEOUT_CASES = [
+  { skill: "claude", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "codex", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "opencode", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "grok", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
