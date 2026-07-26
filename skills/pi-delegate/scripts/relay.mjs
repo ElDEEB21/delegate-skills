@@ -123,9 +123,12 @@ function parseArgs(argv) {
   if (opts.resumeLast && opts.session) {
     fail("--resume-last and --session are mutually exclusive; pass only one");
   }
-  if (opts.model !== null && !opts.model.trim()) fail("--model must not be empty");
-  if (opts.provider !== null && !opts.provider.trim()) fail("--provider must not be empty");
-  if (opts.session !== null && !opts.session.trim()) fail("--session must not be empty");
+  if (opts.model !== null && !/^[\w./:-]+$/.test(opts.model))
+    fail("--model contains invalid characters; use alphanumeric, /, -, ., _, or :");
+  if (opts.provider !== null && !/^[\w-]+$/.test(opts.provider))
+    fail("--provider contains invalid characters; use alphanumeric, -, or _");
+  if (opts.session !== null && !/^[\w-]+$/.test(opts.session))
+    fail("--session contains invalid characters; use alphanumeric, -, or _");
   if (parseDuration(opts.timeout) === null) {
     fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
   }

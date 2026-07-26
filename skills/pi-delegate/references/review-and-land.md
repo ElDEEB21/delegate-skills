@@ -1,6 +1,6 @@
 # Review and land
 
-Pi did the typing; you own the judgment. Verify against reality, never the self-report, and read the
+The implementer made the changes; you own the judgment. Verify against reality, never the self-report, and read the
 diff as generated code because a green gate cannot catch every failure mode.
 
 ## Check tests before trusting gates
