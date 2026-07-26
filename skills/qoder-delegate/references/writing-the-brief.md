@@ -11,7 +11,7 @@ fresh output of `qodercli --list-models`. Omit `--model` for Qoder's default. Pa
 `--context-window <positive-integer>` only when an explicit size is useful and let Qoder reject an
 unsupported model/size combination.
 
-A resumed session keeps context. Send only the correction with `--resume-last` or `--session <id>`.
+A resumed session keeps context. Send only the correction with `--resume-last` or `--resume <id>`.
 
 ## The shape that works
 
@@ -67,6 +67,12 @@ An explicit output contract makes the result reviewable even when the edits are 
 
 One brief -> one Qoder run -> one reviewed commit. Split mixed implementation, review, documentation,
 and roadmap requests. Resume only for rework on that same task.
+
+## Premises freeze at dispatch
+
+Audit the brief's facts before dispatch: ownership, target branch, constraints, and any premise a
+judgment call depends on. If one proves wrong during a run, stop Qoder, inspect and reconcile any
+partial edits, then dispatch a corrected brief.
 
 ## Keep secrets out of argv
 

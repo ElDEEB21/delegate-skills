@@ -43,13 +43,18 @@ echo "Keep the fix, replace the mocked DB assertion with the real migrated fixtu
   node "<skill-dir>/scripts/relay.mjs" --resume-last --cd /path/to/repo
 ```
 
-Use `--session <id>` for the specific `sessionId` in `result.json`. Rework receives the same independent
+Use `--resume <id>` for the specific `sessionId` in `result.json`. Rework receives the same independent
 gate and diff review.
 
 ## Commit boundary
 
 When the gates pass and the diff holds, **the orchestrator commits**. Qoder must never run `git add` or
 `git commit` for this workflow.
+
+Until then, the working tree is the authoritative copy of the implementer's work. Before any cleanup
+or branch switch, inspect `git status`, `git diff`, `git diff --cached`, and every untracked file.
+Staged and untracked work is invisible to a plain `git diff`; preserve it until the review decides
+what to keep.
 
 ## Surface, do not absorb
 

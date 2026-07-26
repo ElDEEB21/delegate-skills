@@ -1,7 +1,7 @@
 # Dispatch and poll
 
-`scripts/relay.mjs` wraps `qodercli -p --output-format stream-json`, captures raw output, and writes a
-stable `result.json`.
+`scripts/relay.mjs` wraps Qoder's non-interactive print mode with `stream-json` output, captures raw
+output, and writes a stable `result.json`.
 
 ## Before the first run
 
@@ -27,15 +27,15 @@ node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 | `--cd <dir>` | Primary working root and child cwd; defaults to current directory. |
 | `--model <name>` | Exact live model value from `qodercli --list-models`; omit for Qoder's default. |
 | `--context-window <n>` | Positive integer requested for models that support explicit sizing. |
-| `--session <id>` | Resume one Qoder session with a delta brief. |
-| `--resume-last` | Continue the most recent Qoder session for this cwd with a delta brief. |
+| `--resume <id>` | Resume one Qoder session with a delta brief. |
+| `--resume-last` | Continue the most recent Qoder session with a delta brief. |
 | `--add-dir <dir>` | Add a workspace directory; repeatable. |
-| `--permission-mode <mode>` | `default`, `accept_edits`, `bypass_permissions`, `dont_ask`, or `auto`; defaults to `accept_edits`. |
-| `--timeout <dur>` | Relay watchdog; defaults to `30m`, using h/m/s syntax. |
+| `--permission-mode <mode>` | `default`, `accept_edits`, `auto`, `bypass_permissions`, `dont_ask`, or `plan`; defaults to `auto`. |
+| `--timeout <dur>` | Relay watchdog; also bounds version preflight to at most 10s. Defaults to `30m`, using h/m/s syntax. |
 | `--out-dir <dir>` | Artifact directory; defaults to a fresh system-temp directory. |
 | `-h`, `--help` | Print relay help. |
 
-`--session` and `--resume-last` are mutually exclusive. Relative `--add-dir` values resolve against
+`--resume` and `--resume-last` are mutually exclusive. Relative `--add-dir` values resolve against
 `--cd`.
 
 ## Model and context behavior
@@ -50,10 +50,13 @@ model behavior.
 
 ## Permission behavior
 
-Print mode cannot ask for approval. `accept_edits` is the implementation default: safe workspace edits
-can proceed, while riskier actions still follow Qoder's rules. Use `dont_ask` to fail closed. Use
-`bypass_permissions` only after the human explicitly accepts a trusted broad run. No mode replaces diff
-review.
+Print mode cannot ask for approval. `auto` is the implementation default: Qoder makes
+non-interactive allow/deny decisions. `accept_edits` allows workspace edits but may deny shell actions;
+`dont_ask` fails closed; `plan` maps to `default` plus Qoder's Plan work state; and
+`bypass_permissions` is only for an explicitly trusted broad run.
+
+Outside a trusted directory, Qoder falls back from any non-default request to `default`. Compare
+`permissionMode` with `actualPermissionMode` in `result.json`. No mode replaces diff review.
 
 ## Artifacts and result fields
 
@@ -67,7 +70,8 @@ Artifacts default outside the repository:
 
 Important `result.json` fields:
 
-- `tool` (`"qoder"`), `status` (`completed`, `failed`, or `qoder_unavailable`), `exitCode`, `signal`.
+- `tool` (`"qoder"`), `status` (`completed`, `failed`, `timeout`, `aborted`, or
+  `qoder_unavailable`), `exitCode`, `signal`.
 - Requested `model`, `contextWindow`, and `permissionMode`; observed `actualModel` and
   `actualPermissionMode` from Qoder's init event.
 - `qoderVersion`, `sessionId`, `resumed`, `startedAt`, and `finishedAt`.
@@ -87,18 +91,27 @@ creating artifacts; missing Qoder exits 127 with `qoder_unavailable`.
 ## Failures
 
 - **`qoder_unavailable`:** install Qoder CLI, authenticate, and re-dispatch.
+- **Preflight `failed` or `timeout`:** `qodercli --version` failed or exceeded its bound; Qoder was
+  not dispatched. Fix the installation before retrying.
 - **`failed`:** read `qoderErrors`, `permissionDenials`, `stderrTail`, `stderr.txt`, and the tail of
   `events.jsonl`. Fix auth, model/context compatibility, permissions, or the brief, then re-dispatch.
-- **Watchdog:** increase `--timeout` or split the task. The relay sends SIGTERM, then SIGKILL after ten
-  seconds if needed.
+- **`timeout`:** increase `--timeout` or split the task. The relay terminates Qoder's process tree.
+- **`aborted`:** the orchestrator stopped the relay; review any touched files before re-dispatching.
+- **No result after the relay disappears:** treat the run as aborted and inspect the working tree and
+  `events.jsonl`. Native Windows cannot deliver Node a catchable `SIGTERM`.
 - **Empty final message:** inspect the diff; require a structured report in the next delta brief.
+
+## Recovering lost work
+
+`events.jsonl` records what Qoder streamed. If a run is interrupted, preserve the working tree first;
+use the event log to scope any redo, not as proof that edits or gates completed.
 
 ## What the relay runs
 
 ```bash
-qodercli -p --output-format stream-json --permission-mode accept_edits \
-  [--model <name>] [--context-window <n>] [--resume <id> | --continue] \
-  [--add-dir <dir> ...] -- <brief>
+qodercli --output-format stream-json --permission-mode auto \
+  [--model <name>] [--context-window <n>] [--resume <id> | -c] \
+  [--add-dir <dir> ...] -p <brief>
 ```
 
 The relay spawns `qodercli` directly without a shell, never commits, and makes no network calls of its

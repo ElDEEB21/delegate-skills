@@ -32,7 +32,7 @@ qodercli --version
 qodercli --list-models
 ```
 
-If the binary is missing, install it using the cURL, Homebrew, or npm method in Qoder's
+If the binary is missing, install it from Qoder's
 [official Quick Start](https://docs.qoder.com/en/cli/quick-start). Authenticate with `qodercli login`,
 or set `QODER_PERSONAL_ACCESS_TOKEN` for automation. A successful `--list-models` confirms the current
 account can return its live model catalog.
@@ -68,12 +68,12 @@ node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 # choose a live model:                 add --model "<value from qodercli --list-models>"
 # request a supported context window: add --context-window 32768
 # resume the latest session:          add --resume-last  # delta brief only
-# resume a specific session:          add --session <id> # delta brief only
+# resume a specific session:          add --resume <id>  # delta brief only
 # see every option:                   node .../relay.mjs --help
 ```
 
-Implementation runs default to Qoder's `accept_edits` permission mode. The relay never bypasses
-permissions unless the caller explicitly passes another mode, and it never commits. See
+Implementation runs default to Qoder's `auto` permission mode. The relay never bypasses permissions
+unless the caller explicitly requests it, and it never commits. See
 [references/dispatch-and-poll.md](references/dispatch-and-poll.md).
 
 ### 3. Wait for completion
@@ -102,16 +102,19 @@ See [references/review-and-land.md](references/review-and-land.md).
 ### 5. Land it
 
 The implementer edits; **the orchestrator commits**. Commit only after the gates pass and the diff
-holds. If rework is needed, send a delta brief with `--resume-last` or `--session <id>`, then review
+holds. If rework is needed, send a delta brief with `--resume-last` or `--resume <id>`, then review
 again.
 
 ## Permission model
 
-Qoder print mode cannot show approval prompts. The relay defaults to `accept_edits`, which permits safe
-workspace edits while Qoder continues to deny or classify riskier actions. `default` can deny actions
-that would require a prompt; `dont_ask` fails closed; `auto` makes non-interactive allow/deny decisions;
-`bypass_permissions` is for explicitly trusted runs only. Qoder safety checks may still deny an action
-in broader modes. Review the diff after every run.
+Qoder print mode cannot show approval prompts. The relay defaults to `auto`, which makes
+non-interactive allow/deny decisions. `default` can deny actions that would require a prompt;
+`accept_edits` permits workspace edits but may deny shell actions; `dont_ask` fails closed; `plan`
+maps to `default` plus Qoder's Plan work state; and `bypass_permissions` is for explicitly trusted
+runs only.
+
+Qoder falls back to `default` when a non-default mode is requested outside a trusted directory. Check
+`actualPermissionMode` in `result.json`; no requested mode replaces diff review.
 
 ## Authorization model
 

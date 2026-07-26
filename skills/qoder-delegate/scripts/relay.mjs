@@ -4,11 +4,11 @@
  *
  * Dispatch a self-contained brief to Qoder CLI (`qodercli -p`), capture the
  * structured event stream, and write a result the orchestrator can review.
- * The relay uses Node built-ins only and shells out only to `qodercli` and
- * `git`. It makes no network calls, reads no credentials, sends no telemetry,
- * and never commits.
+ * The relay uses Node built-ins only and shells out only to `qodercli`, `git`,
+ * and the platform process-termination utility when needed. It makes no
+ * network calls, reads no credentials, sends no telemetry, and never commits.
  *
- * The prompt is passed as a command-line argument. Keep secrets out of the
+ * The brief is passed as a command-line argument. Keep secrets out of the
  * brief on shared hosts; point Qoder at workspace files or environment
  * variables instead.
  *
@@ -21,18 +21,21 @@
  *   --cd <dir>              Qoder working root (default: current directory).
  *   --model <name>          Model from `qodercli --list-models`.
  *   --context-window <n>    Positive integer; supported models only.
- *   --session <id>          Resume one Qoder session; send a delta brief.
+ *   --resume <id>           Resume one Qoder session; send a delta brief.
  *   --resume-last           Continue the latest session; send a delta brief.
  *   --add-dir <dir>         Add a workspace directory. Repeatable.
- *   --permission-mode <m>   default | accept_edits | bypass_permissions |
- *                           dont_ask | auto (default: accept_edits).
+ *   --permission-mode <m>   default | accept_edits | auto |
+ *                           bypass_permissions | dont_ask | plan
+ *                           (default: auto).
  *   --timeout <dur>         Relay watchdog (default: 30m; h/m/s syntax).
  *   --out-dir <dir>         Artifact directory (default: system temp).
  *   -h, --help              Show this help.
  *
  * Result: <out-dir>/result.json plus brief.txt, events.jsonl, stderr.txt, and
  * final.txt when Qoder emits a final message. Pre-run usage errors exit 2 and
- * write no result. Missing `qodercli` exits 127 with qoder_unavailable.
+ * write no result. Missing `qodercli` exits 127 with qoder_unavailable. Once
+ * dispatched, every outcome writes a result: completed, failed, timeout,
+ * aborted, or qoder_unavailable.
  */
 
 import { execFileSync, spawn } from "node:child_process";
@@ -41,6 +44,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -49,6 +53,7 @@ import { basename, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_TIMEOUT = "30m";
+const VERSION_TIMEOUT_MS = 10_000;
 const MAX_BRIEF_BYTES = 120 * 1024;
 const PERMISSION_MODES = new Set([
   "default",
@@ -56,6 +61,7 @@ const PERMISSION_MODES = new Set([
   "bypass_permissions",
   "dont_ask",
   "auto",
+  "plan",
 ]);
 
 function fail(message, code = 2) {
@@ -75,10 +81,10 @@ function parseArgs(argv) {
     cd: process.cwd(),
     model: null,
     contextWindow: null,
-    session: null,
+    resume: null,
     resumeLast: false,
     addDirs: [],
-    permissionMode: "accept_edits",
+    permissionMode: "auto",
     timeout: DEFAULT_TIMEOUT,
     outDir: null,
   };
@@ -101,7 +107,7 @@ function parseArgs(argv) {
       case "--cd": opts.cd = resolve(next()); break;
       case "--model": opts.model = next(); break;
       case "--context-window": opts.contextWindow = next(); break;
-      case "--session": opts.session = next(); break;
+      case "--resume": opts.resume = next(); break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--add-dir": opts.addDirs.push(next()); break;
       case "--permission-mode": opts.permissionMode = next(); break;
@@ -111,9 +117,10 @@ function parseArgs(argv) {
     }
   }
 
-  if (opts.resumeLast && opts.session) {
-    fail("--resume-last and --session are mutually exclusive; pass only one");
+  if (opts.resumeLast && opts.resume) {
+    fail("--resume-last and --resume are mutually exclusive; pass only one");
   }
+  if (opts.resume !== null && !opts.resume.trim()) fail("--resume must not be empty");
   if (opts.model !== null && !opts.model.trim()) fail("--model must not be empty");
   if (opts.contextWindow !== null && !/^[1-9]\d*$/.test(opts.contextWindow)) {
     fail("--context-window must be a positive integer");
@@ -124,6 +131,7 @@ function parseArgs(argv) {
   if (parseDuration(opts.timeout) === null) {
     fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
   }
+  if (parseDuration(opts.timeout) === 0) fail("--timeout must be greater than zero");
   if (!existsSync(opts.cd) || !statSync(opts.cd).isDirectory()) {
     fail(`working directory not found: ${opts.cd}`);
   }
@@ -154,18 +162,49 @@ function readBrief(opts) {
   }
 }
 
-function qoderVersion() {
+function killChild(child, signal = "SIGTERM") {
+  // A timeout/abort must stop Qoder's tools too, or a descendant could keep
+  // editing after the relay reports that the run ended.
+  if (process.platform === "win32") {
+    if (signal !== "SIGTERM") return; // taskkill /f already felled the tree
+    try {
+      execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: ["ignore", "ignore", "inherit"],
+      });
+    } catch { /* The tree already exited. */ }
+  } else {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      try { child.kill(signal); } catch { /* The tree already exited. */ }
+    }
+  }
+}
+
+function qoderVersion(timeoutMs) {
   try {
-    return execFileSync("qodercli", ["--version"], { encoding: "utf8" }).trim() || "unknown";
+    return {
+      version: execFileSync("qodercli", ["--version"], {
+        encoding: "utf8",
+        shell: false,
+        timeout: Math.min(timeoutMs, VERSION_TIMEOUT_MS),
+        killSignal: "SIGKILL",
+      }).trim() || "unknown",
+      error: null,
+    };
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    return "unknown";
+    if (error?.code === "ENOENT") return { version: null, error: null };
+    return { version: null, error };
   }
 }
 
 function gitTouchedFiles(cwd) {
   try {
-    const output = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" });
+    const output = execFileSync("git", ["status", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
     return output.split("\n").map((line) => line.trimEnd()).filter(Boolean);
   } catch {
     return null;
@@ -177,18 +216,22 @@ function timestamp() {
 }
 
 function buildArgv(opts, brief) {
-  const argv = ["-p", "--output-format", "stream-json", "--permission-mode", opts.permissionMode];
+  const argv = ["--output-format", "stream-json", "--permission-mode", opts.permissionMode];
+  if (opts.resume) argv.push("--resume", opts.resume);
+  else if (opts.resumeLast) argv.push("-c");
   if (opts.model) argv.push("--model", opts.model);
   if (opts.contextWindow) argv.push("--context-window", opts.contextWindow);
-  if (opts.session) argv.push("--resume", opts.session);
-  else if (opts.resumeLast) argv.push("--continue");
   for (const dir of opts.addDirs) argv.push("--add-dir", dir);
-  argv.push("--", brief);
+  argv.push("-p", brief);
   return argv;
 }
 
 function makeEventScanner(onObject) {
+  // Qoder documents stream-json as newline-delimited JSON. This brace-aware
+  // scanner also tolerates chunk-split and concatenated objects plus non-JSON
+  // progress text without depending on undocumented event boundaries.
   let buffer = "";
+  let cursor = 0;
   let depth = 0;
   let start = -1;
   let inString = false;
@@ -196,8 +239,8 @@ function makeEventScanner(onObject) {
 
   return (chunk) => {
     buffer += chunk;
-    for (let i = 0; i < buffer.length; i += 1) {
-      const char = buffer[i];
+    for (; cursor < buffer.length; cursor += 1) {
+      const char = buffer[cursor];
       if (inString) {
         if (escaped) escaped = false;
         else if (char === "\\") escaped = true;
@@ -207,22 +250,26 @@ function makeEventScanner(onObject) {
       if (char === '"') {
         if (depth > 0) inString = true;
       } else if (char === "{") {
-        if (depth === 0) start = i;
+        if (depth === 0) start = cursor;
         depth += 1;
       } else if (char === "}" && depth > 0) {
         depth -= 1;
         if (depth === 0 && start !== -1) {
-          const slice = buffer.slice(start, i + 1);
+          const slice = buffer.slice(start, cursor + 1);
           try { onObject(JSON.parse(slice)); } catch { /* Ignore non-event text. */ }
+          buffer = buffer.slice(cursor + 1);
+          cursor = -1;
           start = -1;
         }
       }
     }
-    buffer = depth > 0 && start !== -1 ? buffer.slice(start) : "";
-    depth = 0;
-    start = -1;
-    inString = false;
-    escaped = false;
+    if (depth === 0) {
+      buffer = "";
+      cursor = 0;
+      start = -1;
+      inString = false;
+      escaped = false;
+    }
   };
 }
 
@@ -253,7 +300,7 @@ function makeResultWriter(opts, version, run) {
       model: opts.model,
       contextWindow: opts.contextWindow,
       permissionMode: opts.permissionMode,
-      resumed: Boolean(opts.resumeLast || opts.session),
+      resumed: Boolean(opts.resumeLast || opts.resume),
       qoderVersion: version,
       startedAt: run.startedAt,
       finishedAt: new Date().toISOString(),
@@ -263,7 +310,9 @@ function makeResultWriter(opts, version, run) {
       stderrPath: run.stderrPath,
       ...extra,
     };
-    writeFileSync(run.resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    const temporary = `${run.resultPath}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    renameSync(temporary, run.resultPath);
     return result;
   };
 }
@@ -285,10 +334,42 @@ function reportUnavailable(writeResult, resultPath) {
   process.exit(127);
 }
 
+function reportVersionFailure(writeResult, run, error, timeoutMs) {
+  const timedOut = error?.code === "ETIMEDOUT";
+  const stderr = String(error?.stderr || "").trim();
+  if (stderr) writeFileSync(run.stderrPath, `${stderr}\n`, "utf8");
+  const message = timedOut
+    ? `qodercli --version preflight timed out after ${Math.min(timeoutMs, VERSION_TIMEOUT_MS)}ms; Qoder was not dispatched`
+    : `qodercli --version preflight failed${Number.isInteger(error?.status) ? ` with exit ${error.status}` : ""}; Qoder was not dispatched`;
+  const result = writeResult({
+    status: timedOut ? "timeout" : "failed",
+    exitCode: timedOut ? 124 : Number.isInteger(error?.status) ? error.status : 1,
+    signal: null,
+    sessionId: null,
+    actualModel: null,
+    actualPermissionMode: null,
+    usage: null,
+    resultSubtype: null,
+    qoderErrors: [],
+    permissionDenials: [],
+    finalMessage: "",
+    touchedFiles: null,
+    ...(stderr ? { stderrTail: stderr.split("\n").slice(-20) } : {}),
+    error: message,
+  });
+  printSummary(result, run.resultPath);
+  process.stderr.write(`relay: ${message}\n`);
+  process.exit(result.exitCode);
+}
+
 function dispatch(opts, brief, run, writeResult) {
+  // Target Qoder's currently documented native Windows executable, keeping
+  // argv structured and avoiding a command shell on every platform.
   const child = spawn("qodercli", buildArgv(opts, brief), {
     cwd: opts.cd,
     stdio: ["ignore", "pipe", "pipe"],
+    shell: false,
+    detached: process.platform !== "win32",
   });
   let sessionId = null;
   let actualModel = null;
@@ -300,23 +381,41 @@ function dispatch(opts, brief, run, writeResult) {
   let qoderErrors = [];
   let permissionDenials = [];
   const textChunks = [];
+  const deltaChunks = [];
   const stderrTail = [];
 
   const scan = makeEventScanner((event) => {
-    if (typeof event.session_id === "string") sessionId = event.session_id;
+    const eventSessionId = event.session_id ?? event.sessionId ?? event.session?.id;
+    if (typeof eventSessionId === "string") sessionId = eventSessionId;
     if (event.type === "system" && event.subtype === "init") {
       if (typeof event.model === "string") actualModel = event.model;
-      if (typeof event.permissionMode === "string") actualPermissionMode = event.permissionMode;
+      const mode = event.permissionMode ?? event.permission_mode;
+      if (typeof mode === "string") actualPermissionMode = mode;
     }
-    if (event.type === "assistant" && Array.isArray(event.message?.content)) {
-      for (const block of event.message.content) {
-        if (block?.type === "text" && typeof block.text === "string") textChunks.push(block.text);
+    if (event.type === "assistant" || event.role === "assistant") {
+      const content = event.message?.content ?? event.content;
+      if (typeof content === "string") textChunks.push(content);
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block?.type === "text" && typeof block.text === "string") textChunks.push(block.text);
+        }
       }
     }
-    if (event.type === "result") {
+    if (event.type === "content_block_delta" && typeof event.delta?.text === "string") {
+      deltaChunks.push(event.delta.text);
+    }
+    if (event.type === "result" || event.type === "final") {
       resultSubtype = typeof event.subtype === "string" ? event.subtype : null;
-      resultIsError = event.is_error === true;
-      if (typeof event.result === "string") finalResult = event.result;
+      resultIsError = event.is_error === true || event.status === "error";
+      const resultText = event.result ?? event.final_message ?? event.finalMessage;
+      if (typeof resultText === "string") finalResult = resultText;
+      if (!finalResult && typeof event.message === "string") finalResult = event.message;
+      if (!finalResult && Array.isArray(event.message?.content)) {
+        const blocks = event.message.content
+          .filter((block) => block?.type === "text" && typeof block.text === "string")
+          .map((block) => block.text);
+        if (blocks.length) finalResult = blocks.join("\n\n");
+      }
       if (event.usage && typeof event.usage === "object") usage = event.usage;
       if (Array.isArray(event.errors)) qoderErrors = event.errors;
       if (Array.isArray(event.permission_denials)) permissionDenials = event.permission_denials;
@@ -339,7 +438,7 @@ function dispatch(opts, brief, run, writeResult) {
   });
 
   const assembleFinal = () => {
-    const message = finalResult || textChunks.join("\n\n");
+    const message = finalResult || textChunks.join("\n\n") || deltaChunks.join("");
     if (message) writeFileSync(run.finalPath, message, "utf8");
     return message;
   };
@@ -349,26 +448,57 @@ function dispatch(opts, brief, run, writeResult) {
   let sigkillTimer = null;
   const watchdogTimer = setTimeout(() => {
     watchdogFired = true;
-    const destroyStreams = () => {
+    child.once("exit", () => {
       child.stdout.destroy();
       child.stderr.destroy();
-    };
-    if (child.exitCode !== null || child.signalCode !== null) {
-      destroyStreams();
-    } else {
-      child.once("exit", destroyStreams);
-      child.kill("SIGTERM");
-      sigkillTimer = setTimeout(() => {
-        if (!settled) child.kill("SIGKILL");
-      }, 10_000);
-    }
+    });
+    killChild(child);
+    sigkillTimer = setTimeout(() => {
+      if (!settled) killChild(child, "SIGKILL");
+    }, 10_000);
   }, parseDuration(opts.timeout) ?? parseDuration(DEFAULT_TIMEOUT));
+
+  const clearWatchdog = () => {
+    clearTimeout(watchdogTimer);
+    if (sigkillTimer) clearTimeout(sigkillTimer);
+  };
+
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    process.on(sig, () => {
+      if (settled) return;
+      settled = true;
+      clearWatchdog();
+      const abortedFields = () => ({
+        status: "aborted",
+        exitCode: 128 + (constants.signals[sig] || 15),
+        signal: sig,
+        sessionId,
+        actualModel,
+        actualPermissionMode,
+        usage,
+        resultSubtype,
+        qoderErrors,
+        permissionDenials,
+        finalMessage: assembleFinal(),
+        touchedFiles: gitTouchedFiles(opts.cd),
+        stderrTail: stderrTail.slice(-20),
+        error: `the relay was killed by ${sig}; qodercli was terminated with it — inspect the working tree before re-dispatching`,
+      });
+      const result = writeResult(abortedFields());
+      printSummary(result, run.resultPath);
+      killChild(child);
+      setTimeout(() => {
+        killChild(child, "SIGKILL");
+        writeResult(abortedFields());
+        process.exit(result.exitCode);
+      }, 2000);
+    });
+  }
 
   child.on("error", (error) => {
     if (settled) return;
     settled = true;
-    clearTimeout(watchdogTimer);
-    if (sigkillTimer) clearTimeout(sigkillTimer);
+    clearWatchdog();
     const result = writeResult({
       status: "failed",
       exitCode: 1,
@@ -389,13 +519,16 @@ function dispatch(opts, brief, run, writeResult) {
   child.on("close", (code, signal) => {
     if (settled) return;
     settled = true;
-    clearTimeout(watchdogTimer);
-    if (sigkillTimer) clearTimeout(sigkillTimer);
+    clearWatchdog();
+    if (watchdogFired) killChild(child, "SIGKILL");
+    scan(stdoutDecoder.end());
+    const stderrEnd = stderrDecoder.end();
+    if (stderrEnd.trim()) stderrTail.push(stderrEnd.trimEnd());
     const succeeded = code === 0 && !watchdogFired && !resultIsError;
     const mapped = code ?? (constants.signals[signal] ? 128 + constants.signals[signal] : 1);
     const exitCode = succeeded ? 0 : mapped === 0 ? 1 : mapped;
     const result = writeResult({
-      status: succeeded ? "completed" : "failed",
+      status: succeeded ? "completed" : watchdogFired ? "timeout" : "failed",
       exitCode,
       signal: signal ?? null,
       sessionId,
@@ -408,7 +541,7 @@ function dispatch(opts, brief, run, writeResult) {
       finalMessage: assembleFinal(),
       touchedFiles: gitTouchedFiles(opts.cd),
       ...(succeeded ? {} : { stderrTail: stderrTail.slice(-20) }),
-      ...(watchdogFired ? { error: `qodercli run did not close within --timeout ${opts.timeout}; terminated by the relay watchdog` } : {}),
+      ...(watchdogFired ? { error: `qodercli did not finish within --timeout ${opts.timeout}; killed by the relay watchdog` } : {}),
     });
     printSummary(result, run.resultPath);
     process.exit(exitCode);
@@ -420,14 +553,18 @@ function printSummary(result, resultPath) {
     "",
     `relay: ${result.status} (exit ${result.exitCode}${result.signal ? `, killed by ${result.signal}` : ""}) · qodercli ${result.qoderVersion ?? "?"}`,
   ];
+  if (result.signal === "SIGKILL" && result.status === "failed") lines.push("hint: the host killed qodercli (commonly an OOM killer or supervisor timeout); check host memory and inspect the working tree before re-dispatching.");
+  if (result.signal === "SIGTERM" && result.status === "failed") lines.push("hint: something outside the relay terminated qodercli; relay watchdogs and relay signals report timeout or aborted instead.");
+  if (result.resumed) lines.push("mode: resumed an existing session");
   if (result.actualModel) lines.push(`model: ${result.actualModel}`);
   if (result.contextWindow) lines.push(`context window requested: ${result.contextWindow}`);
-  if (result.sessionId) lines.push(`session id (resume with --session ${result.sessionId}): ${result.sessionId}`);
+  if (result.sessionId) lines.push(`session id (resume with: --resume ${result.sessionId}): ${result.sessionId}`);
   if (result.touchedFiles === null) {
     lines.push("touched files: git unavailable - inspect the working tree directly");
   } else {
     lines.push(`touched files: ${result.touchedFiles.length}`);
     for (const file of result.touchedFiles.slice(0, 40)) lines.push(`  ${file}`);
+    if (result.touchedFiles.length > 40) lines.push(`  ... and ${result.touchedFiles.length - 40} more`);
   }
   if (result.stderrTail?.length) {
     lines.push("last stderr:");
@@ -448,10 +585,12 @@ function main() {
     fail(`brief is ${Math.round(briefBytes / 1024)}KB; keep large context in workspace files instead of argv`);
   }
 
-  const version = qoderVersion();
   const run = prepareRunDir(opts, brief);
-  const writeResult = makeResultWriter(opts, version, run);
-  if (!version) return reportUnavailable(writeResult, run.resultPath);
+  const timeoutMs = parseDuration(opts.timeout) ?? parseDuration(DEFAULT_TIMEOUT);
+  const probe = qoderVersion(timeoutMs);
+  const writeResult = makeResultWriter(opts, probe.version, run);
+  if (!probe.version && !probe.error) return reportUnavailable(writeResult, run.resultPath);
+  if (probe.error) return reportVersionFailure(writeResult, run, probe.error, timeoutMs);
   dispatch(opts, brief, run, writeResult);
 }
 

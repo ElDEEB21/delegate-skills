@@ -3,19 +3,20 @@
 [![skills.sh](https://skills.sh/b/amElnagdy/delegate-skills)](https://skills.sh/amElnagdy/delegate-skills)
 
 Skills for **delegating coding work to a separate CLI agent and landing it yourself**. Your agent (the
-orchestrator) writes a self-contained brief, hands it to an implementer CLI, then reviews the diff and
-commits — staying the reviewer the whole way.
+orchestrator) writes a self-contained brief, dispatches it to an implementer CLI, then reviews the diff
+and commits — staying the reviewer the whole way.
 
-Six skills ship today — same loop, different implementer:
+Seven skills ship today — same loop, different implementer:
 
 | Skill | Drives | Autonomy | Resume |
 | --- | --- | --- | --- |
+| `claude-delegate` | [Claude Code CLI](https://code.claude.com/docs/en/overview) | explicit tools + `acceptEdits`; strict shell-sandbox settings where supported; shell-free `--read-only`; bypass opt-in | `--resume-last`, `--session <id>` |
 | `codex-delegate` | [OpenAI Codex CLI](https://github.com/openai/codex) | Codex `--sandbox` enum (`workspace-write` default) | `--resume-last` |
 | `opencode-delegate` | [OpenCode CLI](https://opencode.ai) | agent: `build` (write) / `plan` (read-only) | `--resume-last`, `--session <id>` |
 | `agy-delegate` | Google Antigravity CLI (`agy`) | Antigravity's own permission policy; bypass is opt-in | `--resume-last`, `--conversation <id>` |
 | `grok-delegate` | Grok Build CLI (`grok`) | explicit: default workspace-scoped, `--read-only` best-effort with violation detection, `--full-access` opt-in | `--resume-last`, `--session <id>` |
 | `kimi-delegate` | Kimi Code CLI (`kimi`) | headless runs always use Kimi's auto permission mode | `--resume-last`, `--session <id>` |
-| `qoder-delegate` | [Qoder CLI](https://docs.qoder.com/en/cli/quick-start) (`qodercli`) | `accept_edits` default; broader Qoder permission modes are explicit | `--resume-last`, `--session <id>` |
+| `qoder-delegate` | [Qoder CLI](https://docs.qoder.com/en/cli/quick-start) (`qodercli`) | `auto` default; bypass is opt-in; effective mode is reported | `--resume-last`, `--resume <id>` |
 
 ## Install
 
@@ -45,13 +46,14 @@ Works with any orchestrating agent the [Skills CLI](https://github.com/vercel-la
 
 The loop:
 
-1. **Write a brief** — a self-contained task spec; the implementer sees only what you send.
+1. **Write a brief** — self-contained task context; the implementer has no orchestrator chat history.
 2. **Dispatch** it with the bundled `relay.mjs`.
-3. **Wait** for completion — the helper writes a structured `result.json`.
+3. **Wait** for completion — the relay writes a structured `result.json`.
 4. **Review** the diff — re-run the project's gates yourself; pair with [guard skills](https://github.com/amElnagdy/guard-skills).
 5. **Land** it — *you* commit, because committing belongs to the reviewer.
 
 ```text
+Use $claude-delegate to have a separate Claude Code session implement the parser fix, then review and commit it.
 Use $codex-delegate to have Codex implement the refactor in services/billing/, then review and commit it.
 Use $kimi-delegate to have Kimi implement the UI cleanup, then review and commit it.
 Use $qoder-delegate to have Qoder implement the parser fix with a 32768-token context window, then review and commit it.
@@ -60,10 +62,24 @@ Use $codex-delegate to run this queue of migration tasks through Codex while I r
 
 Every relay speaks the same `delegate-relay.result.v1` contract: `status`, `exitCode`, `signal`
 (with a host-killed hint when the OOM killer ends a run), the implementer's own final report,
-`touchedFiles`, and a session/conversation id for delta briefs. Learn the loop once, swap the
+`touchedFiles`, and a session/conversation id where the CLI exposes one. Learn the loop once, swap the
 implementer freely.
 
 ## The skills
+
+### claude-delegate
+
+Drive a separate Claude Code CLI session through `claude -p`, with the brief on stdin and the raw
+stream-json artifacts kept for review. The normal profile pairs `acceptEdits` with an explicit tool
+surface; where Claude's shell sandbox exists (macOS, Linux, WSL2) the relay requires it and disables
+the unsandboxed retry, so ordinary gates still run headlessly. `--read-only` drops to plan mode with
+Read, Glob, and Grep, then flags a changed git-porcelain snapshot. The skill docs carry the boundary
+caveats — that sandbox covers shell processes only, hooks run outside the restricted tool surface, and
+`AGENTS.md` is never auto-loaded.
+
+It complements Claude's own subagents, agent teams, and background sessions: those coordinate inside
+Claude Code, while this keeps the brief → dispatch → artifact → review → land contract portable across
+orchestrators, with the commit on the reviewer.
 
 ### codex-delegate
 
@@ -106,8 +122,9 @@ CLI-enforced read-only mode — `touchedFiles` and the diff, not a flag, are the
 Same loop for Qoder CLI (`qodercli`). The relay verifies the installed binary and forwards a requested
 model; the skill requires the orchestrator to select that name from the account's live
 `qodercli --list-models` output. It also forwards an optional positive `--context-window` value for
-models that support explicit sizing. Non-interactive runs use Qoder's `accept_edits` permission mode
-by default; bypass remains opt-in.
+models that support explicit sizing. Non-interactive runs use Qoder's `auto` permission mode by
+default; bypass remains opt-in. Qoder falls back to `default` outside a trusted directory, so the
+relay records both the requested and effective modes.
 
 ### gemini-delegate
 
@@ -133,8 +150,9 @@ bundled `relay.mjs` is the default because it needs nothing but the `codex` bina
 ## Requirements
 
 - The implementer CLI for the skill you install, authenticated as you would at the terminal:
-  [`codex`](https://github.com/openai/codex) (`codex login`) · [`opencode`](https://opencode.ai)
-  (`opencode auth login`) · `agy` (Antigravity's first-launch setup) ·
+  [`claude`](https://code.claude.com/docs/en/setup) (`claude auth login`) ·
+  [`codex`](https://github.com/openai/codex) (`codex login`) ·
+  [`opencode`](https://opencode.ai) (`opencode auth login`) · `agy` (Antigravity's first-launch setup) ·
   `grok` (`npm i -g @xai-official/grok`, then `grok login`) ·
   [`kimi`](https://moonshotai.github.io/kimi-code/en/) (`brew install kimi-code`, then `kimi login`) ·
   [`qodercli`](https://docs.qoder.com/en/cli/quick-start) (`qodercli login`, or
@@ -149,24 +167,36 @@ This package is intentionally inspectable:
 
 - All skill content is Markdown, plus exactly **one** executable per skill — each a `scripts/relay.mjs`.
 - Each `relay.mjs` makes no network calls, reads or writes no credentials, sends no telemetry, and has
-  no dependencies (Node built-ins only). It shells out only to its implementer CLI and `git`. That CLI
-  authenticates exactly as you do at the terminal. Read the script before you run it.
+  no dependencies (Node built-ins only). It launches its implementer CLI and `git`, plus the platform
+  process launcher/termination utility where a Windows shim or process-tree kill requires one. The
+  implementer CLI authenticates exactly as you do at the terminal. Read the script before you run it.
 - None of the relays ever commit — committing is always the orchestrator's job, after review.
 
 **Verification status** — claims here are backed by runs, not assumptions:
 
+- The five previously shipped relays' mechanics are verified: argument handling, exit codes,
+  `result.json`, resume, signal reporting, and the implementer-specific guards.
+- `claude-delegate` — verified end-to-end on macOS against `claude` 2.1.220 (write run under
+  `acceptEdits`; plan mode refusing an edit, with the porcelain tripwire true on a violation and false
+  on a clean run; `--session`/`--resume-last` resume; `claude_unavailable`/127 and usage errors exiting
+  2 without a result file; deny rules and the shell sandbox blocking `git commit`, `git push`,
+  `git -C <dir> push`, a nested `claude`, and a `$HOME` write). CI drives its launch, timeout, and
+  abort paths against a stand-in binary on Linux and Windows; a native Windows launch is unverified.
 - `agy-delegate` — verified end-to-end on macOS against `agy` 1.0.16 (headless edit run, `--print=`
   delivery, absolute `--add-dir` workspace pin).
 - `grok-delegate` — verified end-to-end on macOS against `grok` 0.2.101 (streaming-json report capture,
   file-based brief delivery, resume; read-only is best-effort by measurement, hence the violation flag).
 - `kimi-delegate` — verified end-to-end on macOS against `kimi` 0.24.0 (headless `-p` edit run,
   stream-json parsing, `--session`/`--continue` resume).
-- `qoder-delegate` — contract-tested for argument validation, missing binary, model/context forwarding,
-  result parsing, and watchdog cleanup; verified end-to-end on macOS against `qodercli` 1.0.47 (Lite
-  edit run, `accept_edits`, explicit model and 32768-token context window, no commit).
+- `qoder-delegate` — contract-tested for argument validation, bounded version preflight, missing binary, model/context
+  forwarding, result parsing, and whole-process-tree timeout/abort cleanup; verified end-to-end on
+  macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model
+  and 32768-token context window, no commit).
 - `opencode-delegate` — requires `--model`, since OpenCode has no safe default.
-- Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); native Windows
-  launch smokes for `agy`/`grok`/`kimi`/`qoder` are still pending.
+- Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); the Qoder
+  relay targets its currently documented native `qodercli.exe`. Native Windows launch smokes for
+  `claude`/`agy`/`grok`/`kimi`/`qoder` are still pending. Claude's own shell sandbox is unsupported on
+  native Windows regardless of launch mechanics.
 - The full delegate → review → commit loop is designed for and run on Claude Code; other orchestrators
   (Cursor, …) are designed-for but unproven.
 

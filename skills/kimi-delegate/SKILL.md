@@ -61,6 +61,7 @@ node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 # choose a configured model alias:       add --model <alias from your kimi config>
 # resume the most recent session:        add --resume-last  (delta brief only)
 # resume a specific session:             add --session <id> (delta brief only)
+# hard time limit (watchdog):            add --timeout 2h  (the 30m default suits short runs; implementation briefs routinely need 1-2h)
 # see all options:                       node .../relay.mjs --help
 ```
 
@@ -75,7 +76,8 @@ background it in the shell and poll for `result.json`. A pre-run usage error exi
 result; a missing `kimi` exits 127 and writes `status: "kimi_unavailable"`.
 
 Trust process state and the working tree over a progress display. Completion means the process exited
-and `result.json` exists.
+and `result.json` exists. Kimi's full report is the `finalMessage` field in `result.json` (also printed
+in full on stdout between the report markers).
 
 ### 4. Review - do not trust the self-report
 

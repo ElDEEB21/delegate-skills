@@ -20,7 +20,7 @@ node "<skill-dir>/scripts/relay.mjs" --brief task-01.txt --cd /path/to/repo
 Fresh Qoder sessions do not know earlier queue decisions. Put any helper name, fixture location, or
 interface needed later into the later brief.
 
-Resume only for rework on the same task. Send a delta with `--resume-last` or `--session <id>` from that
+Resume only for rework on the same task. Send a delta with `--resume-last` or `--resume <id>` from that
 task's `result.json`. Start unrelated items in fresh sessions.
 
 ## Keep a progress file
