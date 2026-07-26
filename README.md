@@ -133,8 +133,9 @@ Same loop for the Mistral Vibe CLI (`vibe`). Normal runs use `accept-edits`, whi
 built-in file edits but rejects tools that still require approval in headless mode. `--full-access`
 is the explicit opt-in to `auto-approve`; `--plan-only` selects Vibe's read-only `plan` agent.
 The relay always passes `--trust` to skip only the directory-trust prompt — it does not grant tool
-permissions or add a sandbox. Turn, price, and token limits can bound a run. Vibe's streaming output
-does not expose the new session id, so use `--resume-last` unless you already know a specific id.
+permissions or add a sandbox. Turn and token limits can bound a run; `--max-price` is indicative, not
+a hard budget. Vibe's streaming output does not expose the new session id, so use `--resume-last`
+unless you already know a specific id.
 
 ### gemini-delegate
 
@@ -167,8 +168,8 @@ bundled `relay.mjs` is the default because it needs nothing but the `codex` bina
   [`kimi`](https://moonshotai.github.io/kimi-code/en/) (`brew install kimi-code`, then `kimi login`) ·
   [`qodercli`](https://docs.qoder.com/en/cli/quick-start) (`qodercli login`, or
   `QODER_PERSONAL_ACCESS_TOKEN` for automation) ·
-  [`vibe`](https://github.com/mistralai/mistral-vibe) (`uv tool install mistral-vibe`, then configure
-  `MISTRAL_API_KEY`).
+  [`vibe`](https://github.com/mistralai/mistral-vibe) ([install `uv`](https://docs.astral.sh/uv/getting-started/installation/),
+  then run `uv tool install mistral-vibe` and configure `MISTRAL_API_KEY`).
 - Node 18+ and `git`.
 - An orchestrating agent that can run shell commands and read files.
 - Shell examples assume bash/zsh (macOS/Linux, or Git Bash/WSL on Windows).
@@ -205,14 +206,15 @@ This package is intentionally inspectable:
   macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model
   and 32768-token context window, no commit).
 - `opencode-delegate` — requires `--model`, since OpenCode has no safe default.
-- `vibe-delegate` — contract-tested for launch-mode, resume, tool-filter, and budget forwarding;
-  bounded version preflight; result parsing; and whole-process-tree timeout/abort cleanup. A live
-  Vibe run and native Windows launch are unverified.
+- `vibe-delegate` — contract-tested for launch-mode, resume, tool-filter, and turn/price/token
+  forwarding; bounded version preflight; result parsing; and whole-process-tree timeout/abort
+  cleanup. A live Vibe run and native Windows launch are unverified.
 - Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); the Qoder
   and Vibe relays target their currently documented native executables. Native Windows launch smokes
   for `claude`/`agy`/`grok`/`kimi`/`qoder`/`vibe` are still pending. Claude's own shell sandbox is
-  unsupported on native Windows regardless of launch mechanics; Vibe officially targets UNIX
-  environments, and its native Windows launch is unverified.
+  unsupported on native Windows regardless of launch mechanics. Upstream Vibe works on Windows but
+  officially supports and targets UNIX; this repository has not smoke-tested the relay's native
+  Windows launch.
 - The full delegate → review → commit loop is designed for and run on Claude Code; other orchestrators
   (Cursor, …) are designed-for but unproven.
 

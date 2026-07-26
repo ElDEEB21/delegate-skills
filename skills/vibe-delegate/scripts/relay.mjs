@@ -27,8 +27,8 @@
  * `--full-access` explicitly opts into `auto-approve`; `--plan-only` selects
  * Vibe's read-only `plan` agent.
  *
- * Mistral Vibe officially targets UNIX environments. Native Windows launch is
- * unverified; consult the Mistral Vibe documentation for Windows guidance.
+ * Upstream Vibe works on Windows but officially supports and targets UNIX. This
+ * repository has not smoke-tested the relay's native Windows launch.
  *
  * Usage:
  *   node relay.mjs --brief <file> [options]
@@ -38,7 +38,8 @@
  *   --brief <file>           Path to the brief. If omitted, read it from stdin.
  *   --cd <dir>               Working root for Vibe (default: current directory).
  *   --max-turns <n>          Maximum number of Vibe agent turns (--max-turns).
- *   --max-price <usd>        Maximum session cost in USD (--max-price).
+ *   --max-price <usd>        Indicative cost threshold in USD (--max-price);
+ *                            not a hard budget.
  *   --max-tokens <n>         Maximum cumulative session tokens (--max-tokens).
  *   --session <id>           Resume a specific Vibe session (--resume SESSION_ID);
  *                            send only the delta brief.
@@ -412,7 +413,7 @@ function reportUnavailable(opts, writeResult, resultPath) {
   });
   printSummary(result, resultPath);
   process.stderr.write(
-    "relay: `vibe` not found on PATH. Install with `uv tool install mistral-vibe` and configure MISTRAL_API_KEY.\n",
+    "relay: `vibe` not found on PATH. Install `uv`, run `uv tool install mistral-vibe`, and configure MISTRAL_API_KEY.\n",
   );
   process.exit(127);
 }

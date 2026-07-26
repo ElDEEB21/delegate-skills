@@ -67,8 +67,9 @@ CLI flag, field, and command in the docs must match the installed implementer CL
   `shell:true` on win32 to resolve the `.cmd` shim (which is why their spaceable args are quoted and
   value flags token-validated); the `claude` launch resolves a native `.exe` or separately serializes
   a `.cmd` shim; `agy`, `kimi`, current `qodercli`, and `vibe` installs use native binaries. Each
-  changed launch still needs its own Windows smoke before claiming support; Vibe officially targets
-  UNIX environments, and its native Windows launch is unverified.
+  changed launch still needs its own Windows smoke before claiming support. Upstream Vibe works on
+  Windows but officially supports and targets UNIX; this repository's native Windows relay launch is
+  unverified.
 - Keep the README's "Verification status" honest — claim only what's been run.
 
 ## Local Claude Code config

@@ -10,14 +10,16 @@ command -v vibe
 vibe --version
 ```
 
-Install with `uv tool install mistral-vibe`. Then configure your API key:
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then install Vibe with
+`uv tool install mistral-vibe`. Configure your API key:
 
 ```bash
 vibe --setup                    # interactive setup
 export MISTRAL_API_KEY="..."    # or set it in the environment
 ```
 
-Mistral Vibe officially targets UNIX environments. Native Windows launch is unverified; consult the
+Upstream Vibe works on Windows but officially supports and targets UNIX. This repository has not
+smoke-tested the relay's native Windows launch; consult the
 [official Mistral Vibe documentation](https://github.com/mistralai/mistral-vibe) for Windows guidance.
 
 ## Dispatching
@@ -33,7 +35,7 @@ node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 | `--brief <file>` | Brief path. Omit it to read the brief from stdin. |
 | `--cd <dir>` | Working root and child process cwd (default: current directory). |
 | `--max-turns <n>` | Maximum number of Vibe agent turns (`--max-turns`). Useful for cost control. |
-| `--max-price <usd>` | Positive maximum session cost in USD (`--max-price`). |
+| `--max-price <usd>` | Positive, indicative cost threshold in USD; not a hard budget (`--max-price`). |
 | `--max-tokens <n>` | Positive maximum cumulative session tokens (`--max-tokens`). |
 | `--session <id>` | Resume a specific Vibe session (`--resume SESSION_ID`); send only the delta brief. |
 | `--resume-last` | Resume the most recent Vibe session (`--continue`); send only the delta brief. |
@@ -93,8 +95,9 @@ A pre-run usage error exits 2 and writes no result. A missing `vibe` exits 127 a
 
 ## When a run misbehaves
 
-- **`status: "vibe_unavailable"` (exit 127):** `vibe` isn't on PATH. Install with
-  `uv tool install mistral-vibe` and configure `MISTRAL_API_KEY`, then re-dispatch.
+- **`status: "vibe_unavailable"` (exit 127):** `vibe` isn't on PATH. Install
+  [`uv`](https://docs.astral.sh/uv/getting-started/installation/), run
+  `uv tool install mistral-vibe`, and configure `MISTRAL_API_KEY`, then re-dispatch.
 - **`status: "failed"`:** read `stderrTail`, `stderrPath`, and the tail of `events.jsonl`. Common
   causes: an unconfigured or expired API key, an invalid model, or a trust-folder prompt that was
   not suppressed (the relay passes `--trust`, but check that the binary supports it).

@@ -27,7 +27,7 @@ The loop needs only a shell command and file access, so any comparable orchestra
 
 ## Prerequisites (check once)
 
-1. Install Mistral Vibe:
+1. Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then Mistral Vibe:
    - `uv tool install mistral-vibe`
 2. Configure your API key with `vibe --setup`, or set `MISTRAL_API_KEY` in the environment.
 3. Confirm `vibe --version` succeeds.
@@ -55,7 +55,7 @@ stream, and writes `result.json`. (`<skill-dir>` is the installed folder contain
 ```bash
 node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 # limit turns for cost control:           add --max-turns <n>
-# cap price or total tokens:              add --max-price <usd> --max-tokens <n>
+# indicative price threshold/token cap:  add --max-price <usd> --max-tokens <n>
 # planning/read-only:                     add --plan-only
 # unrestricted shell and tools:           add --full-access (explicit authorization required)
 # resume the most recent session:         add --resume-last  (delta brief only)
