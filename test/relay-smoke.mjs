@@ -7,10 +7,10 @@
  * not complete:
  *
  *   1. timeout  — the watchdog kills the implementer's WHOLE process tree and
- *                 result.json reports status "timeout". Driven for all seven
+ *                 result.json reports status "timeout". Driven for all eight
  *                 relays on both platforms. On Windows, claude launches a .cmd
  *                 shim through a serialized cmd.exe invocation, while
- *                 codex/opencode/grok use shell:true. These are exactly the
+ *                 codex/opencode/grok/pi use shell:true. These are exactly the
  *                 cases a plain child.kill would miss; agy, kimi, and qoder spawn a
  *                 native binary directly — a .cmd stand-in cannot represent them,
  *                 so the smoke compiles a real fake .exe with the C# compiler
@@ -25,13 +25,13 @@
  *   2. aborted  — killing the relay itself still produces result.json with
  *                 status "aborted", and files the implementer flushes during
  *                 the shutdown grace window appear in the refreshed
- *                 touchedFiles. Driven for all seven relays on POSIX; Windows
+ *                 touchedFiles. Driven for all eight relays on POSIX; Windows
  *                 delivers no catchable SIGTERM, so the scenario cannot be
  *                 driven there (the skill docs carry the same caveat).
  *
  * Every fake answers each relay's version preflight (--version, `version`,
- * `changelog`). Quick Claude and Qoder success cases verify brief delivery,
- * launch arguments, environment handling, and result-event parsing. The
+ * `changelog`). Quick Claude, Qoder, and pi success cases verify brief
+ * delivery, launch arguments, environment handling, and result-event parsing. The
  * timeout/abort cases otherwise run until killed and spawn a subprocess of
  * their own; both assert that this grandchild dies with the implementer.
  * Node built-ins only.
@@ -43,7 +43,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder"];
+const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder", "pi"];
 const binaryName = (skill) => skill === "qoder" ? "qodercli" : skill;
 const relayPath = (skill) => join(here, "..", "skills", `${skill}-delegate`, "scripts", "relay.mjs");
 const WIN = process.platform === "win32";
@@ -86,9 +86,9 @@ for (const skill of SKILLS) {
 // ---- one fake CLI, planted on PATH under every relay's binary name ----
 const FAKE = `const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args.includes("--version") && process.env.SMOKE_MODE === "qoder-version-hang") {
+if (args.includes("--version") && /-version-hang$/.test(process.env.SMOKE_MODE || "")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-} else if (args.includes("--version") && process.env.SMOKE_MODE === "qoder-version-fail") {
+} else if (args.includes("--version") && /-version-fail$/.test(process.env.SMOKE_MODE || "")) {
   console.error("fake qoder version failure");
   process.exit(7);
 } else if (args.includes("--version") || args[0] === "version" || args[0] === "changelog") {
@@ -123,7 +123,19 @@ if (process.env.SMOKE_MODE === "qoder-success") {
   }));
   process.exit(0);
 }
-if (["claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
+if (process.env.SMOKE_MODE === "pi-success") {
+  let brief = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => { brief += chunk; });
+  process.stdin.on("end", () => {
+    fs.writeFileSync(process.env.SMOKE_ARGS_FILE, JSON.stringify({ args, brief }));
+    console.log(JSON.stringify({ type: "session", version: 3, id: "pi-session-1", timestamp: "2026-01-01T00:00:00.000Z", cwd: process.cwd() }));
+    console.log(JSON.stringify({ type: "agent_start" }));
+    console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "fake pi completed" }] } }));
+    console.log(JSON.stringify({ type: "agent_end", messages: [] }));
+    process.exit(0);
+  });
+} else if (["claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
   let brief = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => { brief += chunk; });
@@ -233,7 +245,7 @@ const shimDir = join(scratch, "shim");
 mkdirSync(shimDir);
 writeFileSync(join(shimDir, "fake-cli.cjs"), FAKE);
 if (WIN) {
-  for (const skill of ["claude", "codex", "opencode", "grok"]) {
+  for (const skill of ["claude", "codex", "opencode", "grok", "pi"]) {
     writeFileSync(join(shimDir, `${skill}.cmd`), `@node "%~dp0fake-cli.cjs" %*\r\n`);
   }
   const windir = process.env.WINDIR || "C:\\Windows";
@@ -297,7 +309,7 @@ const emptyEffortRun = spawnSync(process.execPath,
 check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 
 // opencode refuses a fresh run without an explicit model
-const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [] };
+const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [], pi: [] };
 
 // ---- Qoder's documented print-mode argv and structured result ----
 {
@@ -439,6 +451,99 @@ const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"],
       ? result(preflightOutDir)
       : {};
     check(`qoder preflight: ${mode} is explicit and prevents dispatch`,
+      preflight.status === expectedExit &&
+      preflightResult.status === expectedStatus &&
+      preflightResult.error?.includes("version preflight") &&
+      preflightResult.error?.includes("was not dispatched"));
+  }
+}
+
+// ---- pi's stdin brief, JSON event stream, and bounded preflight ----
+{
+  const outDir = join(scratch, "out-success-pi");
+  const workDir = freshRepo("work-success-pi");
+  const argsFile = join(scratch, "args-success-pi");
+  const run = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    "--model", "google/fake-model",
+    "--read-only",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "pi-success", SMOKE_ARGS_FILE: argsFile },
+    encoding: "utf8",
+  });
+  const capture = existsSync(argsFile) ? JSON.parse(readFileSync(argsFile, "utf8")) : {};
+  check("pi success: relay exits zero", run.status === 0);
+  check("pi success: documented argv is exact",
+    JSON.stringify(capture.args) === JSON.stringify([
+      "--mode", "json",
+      "--model", "google/fake-model",
+      "--tools", "read,grep,find,ls",
+    ]));
+  check("pi success: brief delivered through stdin", capture.brief === "smoke brief: run until killed.");
+  check("pi success: result.json exists", existsSync(join(outDir, "result.json")));
+  if (existsSync(join(outDir, "result.json"))) {
+    const value = result(outDir);
+    check("pi success: session header and message_end parsed",
+      value.status === "completed" &&
+      value.sessionId === "pi-session-1" &&
+      value.finalMessage === "fake pi completed" &&
+      value.readOnly === true &&
+      value.model === "google/fake-model" &&
+      value.resumed === false);
+  }
+
+  const resumeOutDir = join(scratch, "out-resume-last-pi");
+  const resumeArgsFile = join(scratch, "args-resume-last-pi");
+  const resume = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", resumeOutDir,
+    "--resume-last",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "pi-success", SMOKE_ARGS_FILE: resumeArgsFile },
+    encoding: "utf8",
+  });
+  const resumeCapture = existsSync(resumeArgsFile) ? JSON.parse(readFileSync(resumeArgsFile, "utf8")) : {};
+  check("pi resume-last: uses documented --continue",
+    resume.status === 0 &&
+    resumeCapture.args.includes("--continue") &&
+    !resumeCapture.args.includes("--session") &&
+    existsSync(join(resumeOutDir, "result.json")) &&
+    result(resumeOutDir).resumed === true);
+
+  const zeroTimeoutOutDir = join(scratch, "out-zero-timeout-pi");
+  const zeroTimeout = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", zeroTimeoutOutDir,
+    "--timeout", "0s",
+  ], { env: baseEnv, encoding: "utf8" });
+  check("pi validation: zero timeout is rejected before artifacts",
+    zeroTimeout.status === 2 && !existsSync(zeroTimeoutOutDir));
+
+  for (const [mode, expectedStatus, expectedExit] of [
+    ["pi-version-fail", "failed", 7],
+    // The hang case is POSIX-only: on win32 the preflight kill fells cmd.exe
+    // but the fake's node grandchild would linger and pin the scratch dir.
+    ...(WIN ? [] : [["pi-version-hang", "timeout", 124]]),
+  ]) {
+    const preflightOutDir = join(scratch, `out-${mode}`);
+    const preflight = spawnSync(process.execPath, [
+      relayPath("pi"),
+      "--brief", briefPath,
+      "--cd", workDir,
+      "--out-dir", preflightOutDir,
+      "--timeout", "1s",
+    ], { env: { ...baseEnv, SMOKE_MODE: mode }, encoding: "utf8", timeout: 5000 });
+    const preflightResult = existsSync(join(preflightOutDir, "result.json"))
+      ? result(preflightOutDir)
+      : {};
+    check(`pi preflight: ${mode} is explicit and prevents dispatch`,
       preflight.status === expectedExit &&
       preflightResult.status === expectedStatus &&
       preflightResult.error?.includes("version preflight") &&
@@ -626,6 +731,7 @@ const TIMEOUT_CASES = [
   { skill: "grok", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "kimi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "qoder", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
+  { skill: "pi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "agy", flags: ["--print-timeout", "1s"], exitDeadline: 120_000 },
 ];
 async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag) {
