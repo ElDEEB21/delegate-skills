@@ -169,8 +169,9 @@ This package is intentionally inspectable:
 
 - The five previously shipped relays' mechanics are verified: argument handling, exit codes,
   `result.json`, resume, signal reporting, and the implementer-specific guards.
-- `claude-delegate` — implementation is present, but relay mechanics, an authenticated end-to-end run,
-  and native Windows launch are pending. Its status and docs intentionally make no run-backed claim.
+- `claude-delegate` — synthetic relay mechanics verified on Linux: stdin delivery, stream-json result
+  parsing, nested-session environment filtering, timeout/abort reporting, and process-tree cleanup.
+  An authenticated end-to-end run and native Windows launch are pending.
 - `agy-delegate` — verified end-to-end on macOS against `agy` 1.0.16 (headless edit run, `--print=`
   delivery, absolute `--add-dir` workspace pin).
 - `grok-delegate` — verified end-to-end on macOS against `grok` 0.2.101 (streaming-json report capture,
