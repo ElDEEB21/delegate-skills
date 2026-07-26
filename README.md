@@ -67,23 +67,17 @@ implementer freely.
 
 ### claude-delegate
 
-Drive a separate Claude Code CLI session through `claude -p`, with the brief on stdin and raw
-stream-json artifacts captured for review. The normal profile pairs `acceptEdits` with a restricted
-tool surface; on macOS, Linux, and WSL2, the relay passes settings that require Claude's Bash sandbox,
-auto-approve commands that stay inside it, and disable unsandboxed retries. That sandbox covers shell
-processes only, and merged local or managed settings can affect its effective boundary. Native Windows
-instead pre-approves PowerShell without a shell sandbox and remains pending verification.
+Drive a separate Claude Code CLI session through `claude -p`, with the brief on stdin and the raw
+stream-json artifacts kept for review. The normal profile pairs `acceptEdits` with an explicit tool
+surface; where Claude's shell sandbox exists (macOS, Linux, WSL2) the relay requires it and disables
+the unsandboxed retry, so ordinary gates still run headlessly. `--read-only` drops to plan mode with
+Read, Glob, and Grep, then flags a changed git-porcelain snapshot. The skill docs carry the boundary
+caveats — that sandbox covers shell processes only, hooks run outside the restricted tool surface, and
+`AGENTS.md` is never auto-loaded.
 
-`--read-only` uses plan mode with only Read, Glob, and Grep, then flags a changed git-porcelain
-snapshot. Configured MCP discovery and Claude.ai connectors are disabled, all MCP tools are denied,
-and skills/commands and the Agent tool are unavailable without using `--bare`, so project `CLAUDE.md`,
-hooks, and normal authentication still load. Hooks remain outside the restricted tool surface and can
-trigger the violation flag. Claude Code does not generically auto-load `AGENTS.md`; important
-constraints must be copied into the brief.
-
-This complements Claude's native subagents, agent teams, and background sessions. Those coordinate
-inside Claude Code; `claude-delegate` supplies a cross-orchestrator brief → dispatch → artifact →
-review → land contract with the commit retained by the orchestrator.
+It complements Claude's own subagents, agent teams, and background sessions: those coordinate inside
+Claude Code, while this keeps the brief → dispatch → artifact → review → land contract portable across
+orchestrators, with the commit on the reviewer.
 
 ### codex-delegate
 
@@ -169,13 +163,12 @@ This package is intentionally inspectable:
 
 - The five previously shipped relays' mechanics are verified: argument handling, exit codes,
   `result.json`, resume, signal reporting, and the implementer-specific guards.
-- `claude-delegate` — verified end-to-end on macOS against `claude` 2.1.220 (a write run under
-  `acceptEdits`; plan mode refusing an edit, with `readOnlyViolation` true on a violation and false on
-  a clean run; `--session`/`--resume-last` resume; `claude_unavailable`/exit 127 writing `result.json`
-  while usage errors exit 2 without one; deny rules and the shell sandbox blocking `git commit`,
-  `git push`, nested `claude`, and a `$HOME` write). Synthetic relay mechanics remain verified on
-  Linux: stdin delivery, stream-json result parsing, nested-session environment filtering,
-  timeout/abort reporting, and process-tree cleanup. Native Windows launch remains pending.
+- `claude-delegate` — verified end-to-end on macOS against `claude` 2.1.220 (write run under
+  `acceptEdits`; plan mode refusing an edit, with the porcelain tripwire true on a violation and false
+  on a clean run; `--session`/`--resume-last` resume; `claude_unavailable`/127 and usage errors exiting
+  2 without a result file; deny rules and the shell sandbox blocking `git commit`, `git push`,
+  `git -C <dir> push`, a nested `claude`, and a `$HOME` write). CI drives its launch, timeout, and
+  abort paths against a stand-in binary on Linux and Windows; a native Windows launch is unverified.
 - `agy-delegate` — verified end-to-end on macOS against `agy` 1.0.16 (headless edit run, `--print=`
   delivery, absolute `--add-dir` workspace pin).
 - `grok-delegate` — verified end-to-end on macOS against `grok` 0.2.101 (streaming-json report capture,
