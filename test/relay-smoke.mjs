@@ -7,11 +7,11 @@
  * not complete:
  *
  *   1. timeout  — the watchdog kills the implementer's WHOLE process tree and
- *                 result.json reports status "timeout". Driven for all six
+ *                 result.json reports status "timeout". Driven for all seven
  *                 relays on both platforms. On Windows, claude launches a .cmd
  *                 shim through a serialized cmd.exe invocation, while
  *                 codex/opencode/grok use shell:true. These are exactly the
- *                 cases a plain child.kill would miss; agy and kimi spawn a
+ *                 cases a plain child.kill would miss; agy, kimi, and qoder spawn a
  *                 native binary directly — a .cmd stand-in cannot represent them,
  *                 so the smoke compiles a real fake .exe with the C# compiler
  *                 that ships in-box with Windows (no install, no network) and
@@ -25,13 +25,13 @@
  *   2. aborted  — killing the relay itself still produces result.json with
  *                 status "aborted", and files the implementer flushes during
  *                 the shutdown grace window appear in the refreshed
- *                 touchedFiles. Driven for all six relays on POSIX; Windows
+ *                 touchedFiles. Driven for all seven relays on POSIX; Windows
  *                 delivers no catchable SIGTERM, so the scenario cannot be
  *                 driven there (the skill docs carry the same caveat).
  *
  * Every fake answers each relay's version preflight (--version, `version`,
- * `changelog`). A quick Claude success case verifies stdin delivery, launch
- * arguments, nested-environment filtering, and result-event parsing. The
+ * `changelog`). Quick Claude and Qoder success cases verify brief delivery,
+ * launch arguments, environment handling, and result-event parsing. The
  * timeout/abort cases otherwise run until killed and spawn a subprocess of
  * their own; both assert that this grandchild dies with the implementer.
  * Node built-ins only.
@@ -43,7 +43,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi"];
+const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder"];
+const binaryName = (skill) => skill === "qoder" ? "qodercli" : skill;
 const relayPath = (skill) => join(here, "..", "skills", `${skill}-delegate`, "scripts", "relay.mjs");
 const WIN = process.platform === "win32";
 let failed = 0;
@@ -85,12 +86,41 @@ for (const skill of SKILLS) {
 // ---- one fake CLI, planted on PATH under every relay's binary name ----
 const FAKE = `const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args.includes("--version") || args[0] === "version" || args[0] === "changelog") {
+if (args.includes("--version") && process.env.SMOKE_MODE === "qoder-version-hang") {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+} else if (args.includes("--version") && process.env.SMOKE_MODE === "qoder-version-fail") {
+  console.error("fake qoder version failure");
+  process.exit(7);
+} else if (args.includes("--version") || args[0] === "version" || args[0] === "changelog") {
   console.log("fake-cli 0.0.0-smoke");
   process.exit(0);
 }
 if (process.env.SMOKE_MODE === "capture") {
   fs.writeFileSync(process.env.SMOKE_ARGS_FILE, JSON.stringify(args));
+  process.exit(0);
+}
+if (process.env.SMOKE_MODE === "qoder-success") {
+  fs.writeFileSync(process.env.SMOKE_ARGS_FILE, JSON.stringify(args));
+  console.log(JSON.stringify({
+    type: "system",
+    subtype: "init",
+    session_id: "qoder-session-1",
+    model: "performance",
+    permissionMode: "auto",
+  }));
+  console.log(JSON.stringify({
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "text", text: "working" }] },
+    session_id: "qoder-session-1",
+  }));
+  console.log(JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    session_id: "qoder-session-1",
+    result: "fake qoder completed",
+    usage: { input_tokens: 7, output_tokens: 2 },
+  }));
   process.exit(0);
 }
 if (["claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
@@ -157,7 +187,7 @@ if (["claude-success", "claude-read-only-write", "claude-read-only-clean", "clau
 }
 `;
 
-// agy and kimi spawn a native binary without a shell, so on Windows their stand-in must be a
+// agy, kimi, and qoder spawn a native binary without a shell, so on Windows their stand-in must be a
 // real .exe. The C# compiler ships in-box with the .NET Framework on every supported Windows,
 // which lets the smoke build one locally — no install, no network, still dependency-free.
 const FAKE_EXE_SOURCE = `using System;
@@ -166,8 +196,22 @@ using System.IO;
 using System.Threading;
 class FakeCli {
   static int Main(string[] args) {
+    if (Array.IndexOf(args, "--version") >= 0 && Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-hang") {
+      Thread.Sleep(Timeout.Infinite);
+      return 1;
+    }
+    if (Array.IndexOf(args, "--version") >= 0 && Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-fail") {
+      Console.Error.WriteLine("fake qoder version failure");
+      return 7;
+    }
     if (Array.IndexOf(args, "--version") >= 0 || (args.Length > 0 && (args[0] == "version" || args[0] == "changelog"))) {
       Console.WriteLine("fake-cli 0.0.0-smoke");
+      return 0;
+    }
+    if (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-success") {
+      File.WriteAllLines(Environment.GetEnvironmentVariable("SMOKE_ARGS_FILE"), args);
+      Console.WriteLine("{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"qoder-session-1\\",\\"model\\":\\"performance\\",\\"permissionMode\\":\\"auto\\"}");
+      Console.WriteLine("{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"is_error\\":false,\\"session_id\\":\\"qoder-session-1\\",\\"result\\":\\"fake qoder completed\\",\\"usage\\":{\\"input_tokens\\":7,\\"output_tokens\\":2}}");
       return 0;
     }
     var psi = new ProcessStartInfo {
@@ -197,18 +241,21 @@ if (WIN) {
     join(windir, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
     join(windir, "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe"),
   ].find((p) => existsSync(p));
-  check("windows: the in-box C# compiler exists (builds the native fake for agy/kimi)", Boolean(csc));
+  check("windows: the in-box C# compiler exists (builds the native fake for agy/kimi/qoder)", Boolean(csc));
   if (csc) {
     const csFile = join(shimDir, "fake-cli.cs");
     writeFileSync(csFile, FAKE_EXE_SOURCE);
     const compiled = spawnSync(csc, ["/nologo", `/out:${join(shimDir, "kimi.exe")}`, csFile], { encoding: "utf8" });
     check("windows: the native fake compiled", compiled.status === 0);
-    if (compiled.status === 0) copyFileSync(join(shimDir, "kimi.exe"), join(shimDir, "agy.exe"));
+    if (compiled.status === 0) {
+      copyFileSync(join(shimDir, "kimi.exe"), join(shimDir, "agy.exe"));
+      copyFileSync(join(shimDir, "kimi.exe"), join(shimDir, "qodercli.exe"));
+    }
     else console.error(`${compiled.stdout ?? ""}${compiled.stderr ?? ""}`);
   }
 } else {
   for (const skill of SKILLS) {
-    const shim = join(shimDir, skill);
+    const shim = join(shimDir, binaryName(skill));
     writeFileSync(shim, `#!/bin/sh\nexec node "$(dirname "$0")/fake-cli.cjs" "$@"\n`);
     chmodSync(shim, 0o755);
   }
@@ -250,7 +297,154 @@ const emptyEffortRun = spawnSync(process.execPath,
 check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 
 // opencode refuses a fresh run without an explicit model
-const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [] };
+const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [] };
+
+// ---- Qoder's documented print-mode argv and structured result ----
+{
+  const outDir = join(scratch, "out-success-qoder");
+  const workDir = freshRepo("work-success-qoder");
+  const argsFile = join(scratch, "args-success-qoder");
+  const run = spawnSync(process.execPath, [
+    relayPath("qoder"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    "--resume", "qoder-session-0",
+    "--model", "Performance",
+    "--context-window", "32768",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "qoder-success", SMOKE_ARGS_FILE: argsFile },
+    encoding: "utf8",
+  });
+  const args = existsSync(argsFile)
+    ? WIN
+      ? readFileSync(argsFile, "utf8").split(/\r?\n/).filter(Boolean)
+      : JSON.parse(readFileSync(argsFile, "utf8"))
+    : [];
+  check("qoder success: relay exits zero", run.status === 0);
+  check("qoder success: documented argv is exact",
+    JSON.stringify(args) === JSON.stringify([
+      "--output-format", "stream-json",
+      "--permission-mode", "auto",
+      "--resume", "qoder-session-0",
+      "--model", "Performance",
+      "--context-window", "32768",
+      "-p", "smoke brief: run until killed.",
+    ]));
+  check("qoder success: result.json exists", existsSync(join(outDir, "result.json")));
+  if (existsSync(join(outDir, "result.json"))) {
+    const value = result(outDir);
+    check("qoder success: init and result events parsed",
+      value.status === "completed" &&
+      value.sessionId === "qoder-session-1" &&
+      value.actualModel === "performance" &&
+      value.actualPermissionMode === "auto" &&
+      value.resumed === true &&
+      value.resultSubtype === "success");
+    check("qoder success: usage and final message parsed",
+      value.usage?.input_tokens === 7 &&
+      value.usage?.output_tokens === 2 &&
+      value.finalMessage === "fake qoder completed");
+  }
+
+  const invalidOutDir = join(scratch, "out-invalid-context-qoder");
+  const invalid = spawnSync(process.execPath, [
+    relayPath("qoder"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", invalidOutDir,
+    "--context-window", "0",
+  ], { env: baseEnv, encoding: "utf8" });
+  check("qoder validation: non-positive context is rejected before artifacts",
+    invalid.status === 2 && !existsSync(invalidOutDir));
+
+  const zeroTimeoutOutDir = join(scratch, "out-zero-timeout-qoder");
+  const zeroTimeout = spawnSync(process.execPath, [
+    relayPath("qoder"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", zeroTimeoutOutDir,
+    "--timeout", "0s",
+  ], { env: baseEnv, encoding: "utf8" });
+  check("qoder validation: zero timeout is rejected before preflight",
+    zeroTimeout.status === 2 && !existsSync(zeroTimeoutOutDir));
+
+  const latestOutDir = join(scratch, "out-resume-last-qoder");
+  const latestArgsFile = join(scratch, "args-resume-last-qoder");
+  const latest = spawnSync(process.execPath, [
+    relayPath("qoder"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", latestOutDir,
+    "--resume-last",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "qoder-success", SMOKE_ARGS_FILE: latestArgsFile },
+    encoding: "utf8",
+  });
+  const latestArgs = existsSync(latestArgsFile)
+    ? WIN
+      ? readFileSync(latestArgsFile, "utf8").split(/\r?\n/).filter(Boolean)
+      : JSON.parse(readFileSync(latestArgsFile, "utf8"))
+    : [];
+  check("qoder resume-last: uses documented -c",
+    latest.status === 0 &&
+    latestArgs.includes("-c") &&
+    !latestArgs.includes("--resume") &&
+    existsSync(join(latestOutDir, "result.json")) &&
+    result(latestOutDir).resumed === true);
+
+  const missingOutDir = join(scratch, "out-unavailable-qoder");
+  mkdirSync(missingOutDir);
+  writeFileSync(join(missingOutDir, "result.json"), "{\"status\":\"stale\"}\n");
+  writeFileSync(join(missingOutDir, "final.txt"), "stale final\n");
+  const missing = spawnSync(process.execPath, [
+    relayPath("qoder"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", missingOutDir,
+  ], { env: { ...process.env, PATH: "" }, encoding: "utf8" });
+  check("qoder unavailable: missing binary writes the structured result",
+    missing.status === 127 &&
+    existsSync(join(missingOutDir, "result.json")) &&
+    result(missingOutDir).status === "qoder_unavailable" &&
+    !existsSync(join(missingOutDir, "final.txt")));
+
+  if (WIN) {
+    const longBrief = join(scratch, "long-qoder-brief.txt");
+    const longOutDir = join(scratch, "out-long-brief-qoder");
+    writeFileSync(longBrief, "x".repeat(13 * 1024));
+    const rejected = spawnSync(process.execPath, [
+      relayPath("qoder"),
+      "--brief", longBrief,
+      "--cd", workDir,
+      "--out-dir", longOutDir,
+    ], { env: baseEnv, encoding: "utf8" });
+    check("qoder Windows: oversized argv brief is rejected before artifacts",
+      rejected.status === 2 && !existsSync(longOutDir));
+  }
+
+  for (const [mode, expectedStatus, expectedExit] of [
+    ["qoder-version-hang", "timeout", 124],
+    ["qoder-version-fail", "failed", 7],
+  ]) {
+    const preflightOutDir = join(scratch, `out-${mode}`);
+    const preflight = spawnSync(process.execPath, [
+      relayPath("qoder"),
+      "--brief", briefPath,
+      "--cd", workDir,
+      "--out-dir", preflightOutDir,
+      "--timeout", "1s",
+    ], { env: { ...baseEnv, SMOKE_MODE: mode }, encoding: "utf8", timeout: 5000 });
+    const preflightResult = existsSync(join(preflightOutDir, "result.json"))
+      ? result(preflightOutDir)
+      : {};
+    check(`qoder preflight: ${mode} is explicit and prevents dispatch`,
+      preflight.status === expectedExit &&
+      preflightResult.status === expectedStatus &&
+      preflightResult.error?.includes("version preflight") &&
+      preflightResult.error?.includes("was not dispatched"));
+  }
+}
 
 // ---- Claude's completed stream contract and nested launch environment ----
 {
@@ -431,6 +625,7 @@ const TIMEOUT_CASES = [
   { skill: "opencode", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "grok", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "kimi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
+  { skill: "qoder", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "agy", flags: ["--print-timeout", "1s"], exitDeadline: 120_000 },
 ];
 async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag) {
