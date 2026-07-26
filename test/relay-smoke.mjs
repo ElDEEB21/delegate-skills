@@ -390,6 +390,7 @@ const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"],
     latest.status === 0 &&
     latestArgs.includes("-c") &&
     !latestArgs.includes("--resume") &&
+    existsSync(join(latestOutDir, "result.json")) &&
     result(latestOutDir).resumed === true);
 
   const missingOutDir = join(scratch, "out-unavailable-qoder");
