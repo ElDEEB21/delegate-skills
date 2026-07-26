@@ -178,6 +178,7 @@ function piVersion(launcher) {
     const spec = launchSpec(launcher, ["--version"]);
     const out = execFileSync(spec.command, spec.argv, {
       encoding: "utf8",
+      timeout: 10_000,
       windowsVerbatimArguments: spec.windowsVerbatimArguments,
     }).trim();
     return out || "unknown";
@@ -405,7 +406,10 @@ function dispatch(opts, brief, launcher, run, writeResult) {
     if (event.event === "session" && typeof event.id === "string") {
       sessionId = event.id;
     }
-    if (event.message && typeof event.message === "object") {
+    // message_end carries the finalized message object with model, provider,
+    // usage, and the full assistant content. message_update also carries a
+    // message but with incomplete content — ignore it.
+    if (event.event === "message_end" && event.message && typeof event.message === "object") {
       if (Array.isArray(event.message.content)) {
         for (const block of event.message.content) {
           if (block?.type === "text" && typeof block.text === "string") {

@@ -58,7 +58,7 @@ Use $claude-delegate to have a separate Claude Code session implement the parser
 Use $codex-delegate to have Codex implement the refactor in services/billing/, then review and commit it.
 Use $kimi-delegate to have Kimi implement the UI cleanup, then review and commit it.
 Use $qoder-delegate to have Qoder implement the parser fix with a 32768-token context window, then review and commit it.
-Use $pi-delegate to have pi implement the refactor with gpt-4.1 from provider github, then review and commit it.
+Use $pi-delegate to have pi implement the refactor with a specific model/provider, then review and commit it.
 Use $codex-delegate to run this queue of migration tasks through Codex while I review each one.
 ```
 
@@ -199,7 +199,7 @@ This package is intentionally inspectable:
   file-based brief delivery, resume; read-only is best-effort by measurement, hence the violation flag).
 - `kimi-delegate` — verified end-to-end on macOS against `kimi` 0.24.0 (headless `-p` edit run,
   stream-json parsing, `--session`/`--continue` resume).
-- `pi-delegate` — designed against `pi` 0.80.2 (`--mode json` event stream, `-p` brief delivery,
+- `pi-delegate` — designed against `pi` (`--mode json` event stream, `-p` brief delivery,
   `-c`/`--session-id` resume, `--model`/`--provider` forwarding, `--approve`/`--no-approve` trust control,
   `--tools` read-only mode). End-to-end verification is pending.
 - `qoder-delegate` — contract-tested for argument validation, bounded version preflight, missing binary, model/context

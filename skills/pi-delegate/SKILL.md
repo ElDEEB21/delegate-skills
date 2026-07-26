@@ -55,14 +55,14 @@ context. Include the goal, current state, what to change, what to leave untouche
 
 ### 2. Dispatch
 
-Use the bundled helper. It wraps pi's headless prompt mode with `--mode json`, captures the structured
+Use the bundled relay. It wraps pi's headless prompt mode with `--mode json`, captures the structured
 event stream, and writes `result.json`. (`<skill-dir>` is the installed folder containing this
 `SKILL.md`.)
 
 ```bash
 node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
-# choose the implementer model:            add --model gpt-4o  (or --model provider/model-id)
-# choose a provider:                       add --provider openai
+# choose the implementer model:            add --model <provider/id>
+# choose a provider:                       add --provider <name>
 # read-only (review/diagnosis, no edits):  add --read-only
 # resume the most recent session:          add --resume-last  (delta brief only)
 # resume a specific session:               add --session <id> (delta brief only)
@@ -76,7 +76,7 @@ The relay writes artifacts under the system temp dir by default and never commit
 
 ### 3. Wait for completion
 
-The helper blocks until pi finishes. Run it with the orchestrator's background-command facility, or
+The relay blocks until pi finishes. Run it with the orchestrator's background-command facility, or
 background it in the shell and poll for `result.json`. A pre-run usage error exits 2 and writes no
 result; a missing `pi` exits 127 and writes `status: "pi_unavailable"`.
 

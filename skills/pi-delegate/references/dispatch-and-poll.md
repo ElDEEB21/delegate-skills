@@ -54,6 +54,9 @@ inside the worktree can make the artifacts appear there:
   `signal` (`null` unless the child died on a signal).
 - `workdir`, `model`, `provider`, `resumed`, `piVersion`, `sessionId`, `usage` (input, output,
   totalTokens, cost), `startedAt`, and `finishedAt`.
+- `actualModel`, `actualProvider` — what pi actually used (parsed from the event stream, may
+  differ from the requested `model`/`provider`).
+- `readOnly` — whether `--read-only` was set for this run.
 - `briefPath`, `finalPath`, `eventsPath`, and `stderrPath`.
 - `finalMessage` — assistant `content[0].text` from each `message_end` event, joined with `"\n\n"`.
 - `touchedFiles` — `git status --porcelain` lines for the **final working tree under `--cd` only**.
@@ -65,7 +68,7 @@ inside the worktree can make the artifacts appear there:
 
 ## Waiting for completion
 
-The helper blocks. Use the orchestrator's background-command facility, or background it in a shell and
+The relay blocks. Use the orchestrator's background-command facility, or background it in a shell and
 poll for `result.json`. The run is done only when the process exits and the file contains a `status`.
 
 A pre-run usage error exits 2 and writes no result. A missing `pi` exits 127 and writes
