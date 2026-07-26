@@ -28,35 +28,44 @@
  *   --cd <dir>              Working root for Codex (default: current directory).
  *   --model <name>          Codex model (default: Codex's own configured default).
  *   --effort <level>        Reasoning effort, passed to Codex as
- *                           `-c model_reasoning_effort=<level>` (e.g. low, medium, high,
- *                           xhigh, max, ultra; default: Codex's own configured default).
+ *                           `-c model_reasoning_effort=<level>` (default: Codex's
+ *                           own configured default).
  *   --sandbox <mode>        read-only | workspace-write | danger-full-access
  *                           (default: workspace-write).
  *   --read-only             Shortcut for --sandbox read-only (review/diagnosis, no edits).
  *   --resume-last           Continue the most recent Codex session; send only the delta brief.
  *                           (Inherits the original session's sandbox and working root.)
  *   --skip-git-repo-check   Allow running outside a git repository.
+ *   --timeout <dur>         Relay-side watchdog (default: off). Durations use h/m/s
+ *                           strings like 30m or 2h. On expiry the codex child is killed
+ *                           and result.json gets status "timeout". Codex has no timeout
+ *                           flag of its own, so the watchdog is relay-only.
  *   --out-dir <dir>         Where to write run artifacts (default: a fresh dir under
  *                           the system temp dir, so the repo under review stays clean).
  *   -h, --help              Show this help.
  *
  * Result: written to <out-dir>/result.json and summarized on stdout —
- *   status, exitCode, codexVersion, threadId (for a later resume), finalMessage
+ *   status, exitCode, signal, codexVersion, threadId (for a later resume), finalMessage
  *   (Codex's own report), touchedFiles (git porcelain, null if git can't report), and the paths to
  *   events.jsonl and final.txt.
  *
  * Exit codes: a pre-run usage error (bad/missing args, empty brief) exits 2
  * before any run and writes no result file; a missing `codex` binary exits 127;
  * otherwise the exit code mirrors Codex's own (0 success, non-zero failure).
+ * If the child dies on a signal, the exit code is 128 plus the signal number and
+ * `result.json` records the signal.
  * Once the brief validates, `result.json` is written on every outcome —
- * completed, failed, or codex_unavailable. An orchestrator that polls for the
- * file must therefore also treat a non-zero exit with no file as a usage error.
+ * completed, failed, timeout (the --timeout watchdog fired), aborted (the relay
+ * itself was killed and forwarded the kill to codex), or codex_unavailable. An
+ * orchestrator that polls for the file must therefore also treat a non-zero exit
+ * with no file as a usage error.
  */
 
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
-import { tmpdir } from "node:os";
+import { constants, tmpdir } from "node:os";
+import { StringDecoder } from "node:string_decoder";
 
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 
@@ -74,6 +83,7 @@ function parseArgs(argv) {
     sandbox: "workspace-write",
     resumeLast: false,
     skipGitRepoCheck: false,
+    timeout: null,
     outDir: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -98,6 +108,7 @@ function parseArgs(argv) {
       case "--read-only": opts.sandbox = "read-only"; break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--skip-git-repo-check": opts.skipGitRepoCheck = true; break;
+      case "--timeout": opts.timeout = next(); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
       default:
         fail(`unknown option: ${arg}`);
@@ -106,13 +117,42 @@ function parseArgs(argv) {
   if (!SANDBOX_MODES.has(opts.sandbox)) {
     fail(`invalid --sandbox "${opts.sandbox}" (expected: ${[...SANDBOX_MODES].join(", ")})`);
   }
-  // Codex owns the set of valid levels (it varies by model and CLI version); the
-  // relay only enforces a bare token so argv keeps its no-shell-metacharacters
-  // invariant (see the shell:true note in dispatchToCodex).
-  if (opts.effort && !/^[a-z][a-z0-9-]*$/i.test(opts.effort)) {
-    fail(`invalid --effort "${opts.effort}" (expected a bare level name, e.g. low, medium, high, xhigh, max, ultra)`);
+  if (opts.effort !== null && !/^[a-z][a-z0-9-]*$/i.test(opts.effort)) {
+    fail(`invalid --effort "${opts.effort}" (expected a non-empty bare token)`);
+  }
+  // The watchdog is relay-only (codex has no timeout flag), so a malformed
+  // --timeout must fail loudly here - a silent no-watchdog fallback would be wrong.
+  if (opts.timeout !== null && parseDuration(opts.timeout) === null) {
+    fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
   }
   return opts;
+}
+
+function parseDuration(duration) {
+  // Whole-string match: "1mtypo" must be rejected, not read as one minute.
+  const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(duration);
+  if (!match || (!match[1] && !match[2] && !match[3])) return null;
+  return (Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)) * 1000;
+}
+
+function killChild(child, signal = "SIGTERM") {
+  // The kill must reach the whole process family, not just the immediate child — a tool
+  // subprocess left running would keep editing after the relay reports timeout/aborted.
+  // On Windows the child is the .cmd shim (the shell:true launch above), Windows has no
+  // process-group signals, and Node can't kill a process family without a Job Object, so
+  // kill the tree by pid with the OS tool: /t includes descendants, /f forces it — the
+  // same idiom tree-kill and npm/pnpm use.
+  if (process.platform === "win32") {
+    if (signal !== "SIGTERM") return; // the first taskkill /f already felled the whole tree
+    // stderr is inherited so a real taskkill failure (e.g. access denied) is visible to the operator;
+    // its non-zero exit when the tree is already gone is the expected race and carries nothing to do.
+    try { execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: ["ignore", "ignore", "inherit"] }); }
+    catch { /* already gone — nothing left to kill */ }
+  } else {
+    // On POSIX the child leads its own process group (the detached launch), so the negative-pid
+    // signal reaches every descendant; fall back to the lone pid if the group is already gone.
+    try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch { /* already gone */ } }
+  }
 }
 
 function headerComment() {
@@ -129,6 +169,9 @@ function readBrief(opts) {
     return readFileSync(opts.brief, "utf8");
   }
   // No --brief: read from stdin (fd 0). Empty stdin is an error.
+  if (process.stdin.isTTY) {
+    fail("no --brief given and stdin is a TTY; pass --brief <file> or pipe the brief on stdin");
+  }
   let stdin = "";
   try {
     stdin = readFileSync(0, "utf8");
@@ -184,7 +227,7 @@ function buildArgv(opts, finalPath) {
   if (opts.model) argv.push("-m", opts.model);
   // `-c` is accepted by `exec resume` (unlike `-s`/`-C`), so the effort override
   // applies to fresh and resumed runs alike.
-  if (opts.effort) argv.push("-c", `model_reasoning_effort=${opts.effort}`);
+  if (opts.effort !== null) argv.push("-c", `model_reasoning_effort=${opts.effort}`);
   if (opts.skipGitRepoCheck) argv.push("--skip-git-repo-check");
   argv.push("-"); // read the prompt from stdin
   return argv;
@@ -255,7 +298,7 @@ function makeResultWriter(opts, version, run) {
 }
 
 function reportUnavailable(writeResult, resultPath) {
-  const result = writeResult({ status: "codex_unavailable", exitCode: 127, threadId: null, finalMessage: "", touchedFiles: null });
+  const result = writeResult({ status: "codex_unavailable", exitCode: 127, signal: null, threadId: null, finalMessage: "", touchedFiles: null });
   printSummary(result, resultPath);
   process.stderr.write("relay: `codex` not found on PATH. Install it (npm i -g @openai/codex) and run `codex login`.\n");
   process.exit(127);
@@ -265,16 +308,21 @@ function dispatchToCodex(opts, brief, run, writeResult) {
   const argv = buildArgv(opts, run.finalPath);
   // shell:true on Windows so the codex.cmd shim resolves (see codexVersion). Safe:
   // the brief is fed via child.stdin below — never argv — and argv holds only
-  // sandbox enums, model names, a pattern-checked effort level, and file paths,
-  // with no shell metacharacters.
-  const child = spawn("codex", argv, { cwd: opts.cd, stdio: ["pipe", "pipe", "pipe"], shell: process.platform === "win32" });
+  // sandbox enums, model names, the pattern-checked effort, and file paths.
+  // detached on POSIX: the child leads a new process group so killChild can fell the whole tree
+  const child = spawn("codex", argv, { cwd: opts.cd, stdio: ["pipe", "pipe", "pipe"], shell: process.platform === "win32", detached: process.platform !== "win32" });
 
   let threadId = null;
   let stdoutBuf = "";
   const stderrTail = [];
 
+  // Decode across chunk boundaries: a multibyte UTF-8 character split between
+  // two data events would otherwise decode as U+FFFD and corrupt the report.
+  const stdoutDecoder = new StringDecoder("utf8");
+  const stderrDecoder = new StringDecoder("utf8");
+
   child.stdout.on("data", (chunk) => {
-    stdoutBuf += chunk.toString();
+    stdoutBuf += stdoutDecoder.write(chunk);
     let nl;
     while ((nl = stdoutBuf.indexOf("\n")) !== -1) {
       const line = stdoutBuf.slice(0, nl);
@@ -286,33 +334,105 @@ function dispatchToCodex(opts, brief, run, writeResult) {
   });
 
   child.stderr.on("data", (chunk) => {
-    const text = chunk.toString();
-    process.stderr.write(text); // surface Codex progress live for the orchestrator
+    process.stderr.write(chunk); // surface Codex progress live for the orchestrator
+    const text = stderrDecoder.write(chunk);
     for (const line of text.split("\n")) {
       if (line.trim()) stderrTail.push(line.trimEnd());
     }
     while (stderrTail.length > 20) stderrTail.shift();
   });
 
+  let settled = false;
+  let watchdogFired = false;
+  let watchdogTimer = null;
+  let sigkillTimer = null;
+  const timeoutMs = opts.timeout === null ? null : parseDuration(opts.timeout);
+  if (timeoutMs !== null) {
+    watchdogTimer = setTimeout(() => {
+      watchdogFired = true;
+      child.once("exit", () => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+      });
+      killChild(child);
+      sigkillTimer = setTimeout(() => {
+        if (!settled) killChild(child, "SIGKILL");
+      }, 10_000);
+    }, timeoutMs);
+  }
+
+  const clearWatchdog = () => {
+    if (watchdogTimer) clearTimeout(watchdogTimer);
+    if (sigkillTimer) clearTimeout(sigkillTimer);
+  };
+
+  // The relay's own death must still produce a result: without this, a kill from the
+  // orchestrator's side (its command timeout, a stopped task, a closed terminal) writes
+  // no result.json and leaves the codex child running or dying mid-edit with nothing
+  // recording why. SIGTERM/SIGHUP registration is a no-op on Windows; SIGINT works there.
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    process.on(sig, () => {
+      if (settled) return;
+      settled = true;
+      clearWatchdog();
+      const finalMessage = existsSync(run.finalPath) ? readFileSync(run.finalPath, "utf8").trim() : "";
+      const abortedFields = {
+        status: "aborted",
+        exitCode: 128 + (constants.signals[sig] || 15),
+        signal: sig,
+        threadId,
+        finalMessage,
+        touchedFiles: gitTouchedFiles(opts.cd),
+        stderrTail: stderrTail.slice(-20),
+        error: `the relay was killed by ${sig}; codex was terminated with it — inspect the working tree before re-dispatching`,
+      };
+      const result = writeResult(abortedFields);
+      printSummary(result, run.resultPath);
+      killChild(child);
+      setTimeout(() => {
+        killChild(child, "SIGKILL");
+        // the child may flush files during the grace window; refresh the snapshot so the
+        // artifact matches the tree the orchestrator will actually find
+        writeResult({ ...abortedFields, touchedFiles: gitTouchedFiles(opts.cd) });
+        process.exit(result.exitCode);
+      }, 2000);
+    });
+  }
+
   child.on("error", (err) => {
-    const result = writeResult({ status: "failed", exitCode: 1, threadId, finalMessage: "", touchedFiles: gitTouchedFiles(opts.cd), error: String(err && err.message ? err.message : err) });
+    if (settled) return;
+    settled = true;
+    clearWatchdog();
+    const result = writeResult({ status: "failed", exitCode: 1, signal: null, threadId, finalMessage: "", touchedFiles: gitTouchedFiles(opts.cd), error: String(err && err.message ? err.message : err) });
     printSummary(result, run.resultPath);
     process.exit(1);
   });
 
-  child.on("close", (code) => {
+  child.on("close", (code, signal) => {
+    if (settled) return;
+    settled = true;
+    clearWatchdog();
+    // a descendant that ignored SIGTERM must not outlive the timeout report: once the
+    // parent is down, sweep the group (no-op where taskkill already felled the tree)
+    if (watchdogFired) killChild(child, "SIGKILL");
     if (stdoutBuf.trim()) {
       const tid = recordEventLine(run.eventsPath, stdoutBuf);
       if (tid) threadId = tid;
     }
     const finalMessage = existsSync(run.finalPath) ? readFileSync(run.finalPath, "utf8").trim() : "";
+    // A timed-out run is never a success even if codex handles SIGTERM by exiting 0 -
+    // orchestrators key off status and the relay exit code.
+    const succeeded = code === 0 && !watchdogFired;
+    const mapped = code ?? (constants.signals[signal] ? 128 + constants.signals[signal] : 1);
     const result = writeResult({
-      status: code === 0 ? "completed" : "failed",
-      exitCode: code === null ? 1 : code,
+      status: succeeded ? "completed" : watchdogFired ? "timeout" : "failed",
+      exitCode: succeeded ? 0 : mapped === 0 ? 1 : mapped,
+      signal: signal ?? null,
       threadId,
       finalMessage,
       touchedFiles: gitTouchedFiles(opts.cd),
-      ...(code === 0 ? {} : { stderrTail: stderrTail.slice(-20) }),
+      ...(succeeded ? {} : { stderrTail: stderrTail.slice(-20) }),
+      ...(watchdogFired ? { error: `codex did not finish within --timeout ${opts.timeout}; killed by the relay watchdog` } : {}),
     });
     printSummary(result, run.resultPath);
     process.exit(result.exitCode);
@@ -345,7 +465,9 @@ function main() {
 function printSummary(result, resultPath) {
   const lines = [];
   lines.push("");
-  lines.push(`relay: ${result.status} (exit ${result.exitCode})  ·  codex ${result.codexVersion ?? "?"}`);
+  lines.push(`relay: ${result.status} (exit ${result.exitCode}${result.signal ? `, killed by ${result.signal}` : ""})  ·  codex ${result.codexVersion ?? "?"}`);
+  if (result.signal === "SIGKILL" && result.status === "failed") lines.push("hint: the host killed the process (commonly the OOM killer or a supervisor timeout) — this is not a codex error; check host memory and re-dispatch, or split the task into smaller briefs.");
+  if (result.signal === "SIGTERM" && result.status === "failed") lines.push("hint: something outside the relay terminated codex (a supervisor, the session ending, or a manual kill) — when the relay itself does the killing it reports status \"timeout\" or \"aborted\" instead; inspect the working tree before re-dispatching.");
   if (result.resumeLast) lines.push("mode: resumed most recent session");
   if (result.threadId) lines.push(`thread id (resume with: codex exec resume ${result.threadId}): ${result.threadId}`);
   const touched = result.touchedFiles;

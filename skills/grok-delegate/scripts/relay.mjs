@@ -1,29 +1,39 @@
 #!/usr/bin/env node
 /**
- * delegate-skills · opencode-delegate · relay.mjs
+ * delegate-skills · grok-delegate · relay.mjs
  *
- * Dispatch a self-contained brief to the OpenCode CLI (`opencode run`),
+ * Dispatch a self-contained brief to the Grok Build CLI (`grok --prompt-file`),
  * capture the run, and write a structured result the orchestrating agent can
  * review. The orchestrator runs this one command and reads the result JSON —
- * every OpenCode-specific mechanic lives in here, which keeps the skill
- * orchestrator-agnostic. Verified against opencode CLI v1.17.13.
+ * every Grok-specific mechanic lives in here, which keeps the skill
+ * orchestrator-agnostic. Verified end-to-end on macOS against grok 0.2.101;
+ * other shell-capable agents (Claude Code, Cursor, …) are designed-for but not
+ * yet verified there.
  *
  * Trust posture: relay.mjs itself makes no network calls, reads or writes no
  * credentials, and sends no telemetry; it has no dependencies (Node built-ins
- * only). It shells out only to `opencode` and `git`. The `opencode` process it
+ * only). It shells out only to `grok` and `git`. The `grok` process it
  * launches does authenticate — exactly as you do at the terminal. Read this
  * file before you run it.
  *
  * It deliberately does NOT commit. Committing is always the orchestrator's job —
  * after it reviews the diff and re-runs the project gates.
  *
- * OpenCode autonomy is governed by the chosen agent, not a sandbox enum:
- *   build (default) — write-capable; edits files in the working dir headlessly.
- *   plan            — read-only; reviews/diagnoses without touching the tree.
- * A build run passes `--auto` by default so OpenCode never blocks on a permission
- * prompt no one can answer in headless mode; the orchestrator's diff review is the
- * safety net. Pass --no-auto to instead honor the agent's own permission config.
- * A plan (read-only) run never gets --auto, so it can't be auto-approved into edits.
+ * Grok's default permission mode is `ask`, which blocks on approval prompts in
+ * a non-interactive pipe. The relay therefore sets autonomy explicitly:
+ *   default        — `--always-approve --sandbox workspace` (write in CWD)
+ *   --read-only    — `--sandbox read-only --permission-mode plan` (review intent)
+ *   --full-access  — `--always-approve --sandbox off` (unrestricted; opt-in)
+ *
+ * `--read-only` is best-effort, NOT a hard guarantee: on grok 0.2.101 the
+ * read-only sandbox governs out-of-workspace filesystem/network access, not the
+ * agent's own edit tool, and headless `plan` mode is advisory — a determined run
+ * can still write the working tree. Always confirm `touchedFiles` after a
+ * read-only run; don't rely on the flag alone.
+ *
+ * The brief is handed to grok via `--prompt-file`, never argv: it stays out of
+ * the host process list, isn't bounded by the OS arg-length cap, and a brief
+ * that starts with "-" can't be misread as a flag.
  *
  * Usage:
  *   node relay.mjs --brief <file> [options]
@@ -31,38 +41,38 @@
  *
  * Options:
  *   --brief <file>          Path to the brief. If omitted, the brief is read from stdin.
- *   --cd <dir>              Working root for OpenCode (default: current directory).
- *   --model <name>          Model as provider/model. REQUIRED for a fresh run — OpenCode has no
- *                           safe default; a resumed run inherits its session's model.
- *   --agent <name>          OpenCode agent (default: build). Use plan for read-only review.
- *   --read-only             Shortcut for --agent plan (review/diagnosis, no edits).
- *   --variant <name>        Provider reasoning effort (e.g. high, max, minimal).
- *   --no-auto               Don't pass --auto; honor the agent's own permission config (a headless
- *                           run may then hang if the agent is set to ask for a permission).
- *   --resume-last           Continue the most recent OpenCode session; send only the delta brief.
- *   --session <id>          Continue a specific session id (ses_...); send only the delta brief.
- *   --pure                  Run OpenCode without external plugins (cleaner event stream).
+ *   --cd <dir>              Working root for Grok (default: current directory).
+ *   --model <name>          Grok model (default: Grok's own configured default).
+ *   --effort <level>        Reasoning effort for this run (passed as `--effort`).
+ *   --max-turns <n>         Maximum number of agent turns for this run.
+ *   --read-only             Review/diagnosis with no edits (`--sandbox read-only`).
+ *   --full-access           Unrestricted auto-approve (`--sandbox off`); opt-in.
+ *   --resume-last           Continue the most recent Grok session for this cwd;
+ *                           send only the delta brief.
+ *   --session <id>          Continue a specific session id; send only the delta brief.
+ *                           Mutually exclusive with --resume-last.
  *   --timeout <dur>         Relay-side watchdog (default: off). Durations use h/m/s
- *                           strings like 30m or 2h. On expiry the opencode child is
- *                           killed and result.json gets status "timeout".
+ *                           strings like 30m or 2h. On expiry the grok child is killed
+ *                           and result.json gets status "timeout".
  *   --out-dir <dir>         Where to write run artifacts (default: a fresh dir under
  *                           the system temp dir, so the repo under review stays clean).
  *   -h, --help              Show this help.
  *
  * Result: written to <out-dir>/result.json and summarized on stdout —
- *   status, exitCode, signal, opencodeVersion, sessionId (for a later resume), finalMessage
- *   (OpenCode's own report), touchedFiles (git porcelain, null if git can't report), and the
- *   paths to events.jsonl and final.txt.
+ *   status, exitCode, grokVersion, sessionId (for a later resume), finalMessage
+ *   (Grok's own report), usage (token counts from the run's end event, null if
+ *   none), touchedFiles (git porcelain, null if git can't report), and the paths
+ *   to events.jsonl and final.txt.
  *
  * Exit codes: a pre-run usage error (bad/missing args, empty brief) exits 2
- * before any run and writes no result file; a missing `opencode` binary exits 127;
- * otherwise the exit code mirrors OpenCode's own (0 success, non-zero failure).
- * If the child dies on a signal, the exit code is 128 plus the signal number and
+ * before any run and writes no result file; a missing `grok` binary exits 127;
+ * otherwise the exit code mirrors Grok's own (0 success, non-zero failure). If
+ * the child dies on a signal, the exit code is 128 plus the signal number and
  * `result.json` records the signal.
  * Once the brief validates, `result.json` is written on every outcome —
  * completed, failed, timeout (the --timeout watchdog fired), aborted (the relay
- * itself was killed and forwarded the kill to opencode), or
- * opencode_unavailable. An orchestrator that polls for the
+ * itself was killed and forwarded the kill to grok), or grok_unavailable. An
+ * orchestrator that polls for the
  * file must therefore also treat a non-zero exit with no file as a usage error.
  */
 
@@ -71,6 +81,8 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } fr
 import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
+
+const AUTONOMY_MODES = new Set(["workspace-write", "read-only", "full-access"]);
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -82,12 +94,11 @@ function parseArgs(argv) {
     brief: null,
     cd: process.cwd(),
     model: null,
-    agent: "build",
-    variant: null,
-    auto: true,
+    effort: null,
+    maxTurns: null,
+    autonomy: "workspace-write",
     resumeLast: false,
     session: null,
-    pure: false,
     timeout: null,
     outDir: null,
   };
@@ -108,24 +119,39 @@ function parseArgs(argv) {
       case "--brief": opts.brief = next(); break;
       case "--cd": opts.cd = resolve(next()); break;
       case "--model": opts.model = next(); break;
-      case "--agent": opts.agent = next(); break;
-      case "--read-only": opts.agent = "plan"; break;
-      case "--variant": opts.variant = next(); break;
-      case "--auto": opts.auto = true; break;
-      case "--no-auto": opts.auto = false; break;
+      case "--effort": opts.effort = next(); break;
+      case "--max-turns": opts.maxTurns = next(); break;
+      case "--read-only": opts.autonomy = "read-only"; break;
+      case "--full-access": opts.autonomy = "full-access"; break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--session": opts.session = next(); break;
-      case "--pure": opts.pure = true; break;
       case "--timeout": opts.timeout = next(); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
       default:
         fail(`unknown option: ${arg}`);
     }
   }
-  // The watchdog is relay-only (the opencode launch has no timeout flag), so a malformed
+  // The watchdog is relay-only (the grok launch has no timeout flag), so a malformed
   // --timeout must fail loudly here - a silent no-watchdog fallback would be wrong.
   if (opts.timeout !== null && parseDuration(opts.timeout) === null) {
     fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
+  }
+  if (!AUTONOMY_MODES.has(opts.autonomy)) {
+    fail(`invalid autonomy "${opts.autonomy}"`);
+  }
+  if (opts.resumeLast && opts.session) {
+    fail("--resume-last and --session are mutually exclusive");
+  }
+  // These values reach a shell on win32 (shell:true for the .cmd shim), so restrict them to safe tokens.
+  const safeToken = /^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/;
+  for (const flag of ["model", "effort", "session"]) {
+    if (opts[flag] !== null && !safeToken.test(opts[flag])) {
+      fail(`--${flag} value contains unsupported characters (allowed: letters, digits, . _ : / -)`);
+    }
+  }
+  // Digits-only also keeps the value safe for the win32 shell launch.
+  if (opts.maxTurns !== null && !/^[1-9]\d*$/.test(opts.maxTurns)) {
+    fail("--max-turns must be a positive integer");
   }
   return opts;
 }
@@ -161,7 +187,7 @@ function headerComment() {
   // The leading block comment doubles as --help text.
   const src = readFileSync(new URL(import.meta.url), "utf8");
   const match = src.match(/\/\*\*([\s\S]*?)\*\//);
-  if (!match) return "relay.mjs — dispatch a brief to opencode run\n";
+  if (!match) return "relay.mjs — dispatch a brief to grok --prompt-file\n";
   return match[1].replace(/^\s*\* ?/gm, "").trim() + "\n";
 }
 
@@ -170,10 +196,10 @@ function readBrief(opts) {
     if (!existsSync(opts.brief)) fail(`brief file not found: ${opts.brief}`);
     return readFileSync(opts.brief, "utf8");
   }
-  // No --brief: read from stdin (fd 0). Empty stdin is an error.
   if (process.stdin.isTTY) {
     fail("no --brief given and stdin is a TTY; pass --brief <file> or pipe the brief on stdin");
   }
+  // No --brief: read from stdin (fd 0). Empty stdin is an error.
   let stdin = "";
   try {
     stdin = readFileSync(0, "utf8");
@@ -183,21 +209,26 @@ function readBrief(opts) {
   return stdin;
 }
 
-function opencodeVersion() {
+function grokVersion() {
   try {
-    // On Windows, npm installs `opencode` as a .cmd shim; Node's CreateProcess only
+    // On Windows, npm installs `grok` as a .cmd shim; Node's CreateProcess only
     // auto-appends .exe, never .cmd, so launching it needs shell:true there or it
     // ENOENTs on a working install. POSIX is unaffected. (git installs a real
     // git.exe and must NOT get this flag — see gitTouchedFiles.)
-    return execFileSync("opencode", ["--version"], { encoding: "utf8", shell: process.platform === "win32" }).trim();
+    // Prefer `grok version` (documented subcommand); fall back to `--version`.
+    try {
+      return execFileSync("grok", ["version"], { encoding: "utf8", shell: process.platform === "win32" }).trim();
+    } catch {
+      return execFileSync("grok", ["--version"], { encoding: "utf8", shell: process.platform === "win32" }).trim();
+    }
   } catch {
     return null;
   }
 }
 
 function gitTouchedFiles(cwd) {
-  // null (not []) when git can't report — git missing, or a non-repo run — so the
-  // caller can tell "git unavailable" apart from "OpenCode changed nothing."
+  // null (not []) when git can't report — git missing, or a non-repo run —
+  // so the caller can tell "git unavailable" apart from "Grok changed nothing."
   // [] means git ran and the working tree is clean.
   try {
     const out = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" });
@@ -212,40 +243,63 @@ function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-function buildArgv(opts) {
-  const argv = ["run", "--format", "json"];
-  if (opts.pure) argv.push("--pure");
-  // Resume continues an existing session; --session pins a specific id, otherwise
-  // --continue picks up the most recent one. A resumed run inherits its original
-  // agent, so we only set --agent on a fresh run.
-  if (opts.session) {
-    argv.push("--session", opts.session);
-  } else if (opts.resumeLast) {
-    argv.push("--continue");
-  } else {
-    argv.push("--agent", opts.agent);
+function autonomyFlags(autonomy) {
+  // Maps the relay's three autonomy modes onto Grok's native --sandbox /
+  // --always-approve / --permission-mode flags. Grok's default permission mode
+  // is `ask`, which hangs a headless pipe — so every path sets autonomy
+  // explicitly. Sandbox profiles (verified valid on grok 0.2.101):
+  //   workspace  — write CWD /tmp ~/.grok/   (workspace-write analog)
+  //   read-only  — review intent ONLY; the sandbox restricts out-of-workspace
+  //                access, not grok's own edit tool, so a headless run can still
+  //                write the tree. Best-effort — verify touchedFiles afterward.
+  //   off        — unrestricted              (full-access opt-in)
+  switch (autonomy) {
+    case "read-only":
+      return ["--sandbox", "read-only", "--permission-mode", "plan"];
+    case "full-access":
+      return ["--always-approve", "--sandbox", "off"];
+    case "workspace-write":
+    default:
+      return ["--always-approve", "--sandbox", "workspace"];
   }
+}
+
+function buildArgv(opts, run) {
+  // ponytail: shell:true on win32 (needed for the grok.cmd shim) doesn't quote
+  // args, so a path with spaces (C:\Users\First Last\...) splits before grok
+  // sees it. Quote the two spaceable path args; --model/--effort/--session are
+  // already restricted to safe tokens at parse time.
+  // Ceiling: if quoting proves too blunt, drop shell:true and resolve the shim.
+  const quotePath = (p) => (process.platform === "win32" ? `"${p}"` : p);
+  // Always: automation hygiene + structured events + working root.
+  const argv = [
+    "--no-auto-update",
+    "--no-alt-screen",
+    "--output-format", "streaming-json",
+    "--cwd", quotePath(opts.cd),
+  ];
+
+  if (opts.resumeLast) argv.push("--continue");
+  else if (opts.session) argv.push("--resume", opts.session);
+
+  // Re-pass autonomy on resume too — headless permission mode may not inherit.
+  argv.push(...autonomyFlags(opts.autonomy));
+
   if (opts.model) argv.push("--model", opts.model);
-  if (opts.variant) argv.push("--variant", opts.variant);
-  // --auto (on by default) auto-approves permissions so a headless build run doesn't
-  // block on a prompt no one can answer; --no-auto honors the agent's own config.
-  // Never on a plan (read-only) run: --auto would approve the plan agent's ask-gated
-  // edit/bash permissions and let a "read-only" review modify the tree. A plan run
-  // only reads, so it doesn't need auto-approval anyway.
-  if (opts.auto && opts.agent !== "plan") argv.push("--auto");
-  // No message argument: the brief is piped on stdin (see dispatchToOpenCode),
-  // which avoids all argv-quoting issues with multi-line, XML-tagged briefs.
+  if (opts.effort) argv.push("--effort", opts.effort);
+  if (opts.maxTurns) argv.push("--max-turns", opts.maxTurns);
+
+  // Deliver the brief via a file, not argv: keeps it out of the host process
+  // list, isn't bounded by the OS arg-length cap, and a brief that begins with
+  // "-" can't be misread as a flag. prepareRunDir already wrote run.briefPath.
+  argv.push("--prompt-file", quotePath(run.briefPath));
   return argv;
 }
 
 function makeEventScanner(onObject) {
-  // OpenCode emits newline-delimited JSON events on stdout, but local plugins can
-  // prepend terminal-notify escape sequences (e.g. `]777;notify;...{...}`) on the
-  // same line. A plain line-splitter would choke on those. This brace-aware
-  // scanner instead walks the byte stream, ignores anything at depth 0 that isn't
-  // a top-level object, and emits each complete `{...}` it closes — robust to junk
-  // prefixes and concatenated objects alike. String/escape state is tracked so
-  // braces inside string values never throw off the depth count.
+  // streaming-json is documented as newline-delimited JSON, but be defensive:
+  // brace-aware scan (same approach as opencode-delegate) tolerates junk prefixes
+  // and concatenated objects if the format drifts.
   let buf = "";
   let depth = 0;
   let start = -1;
@@ -261,9 +315,6 @@ function makeEventScanner(onObject) {
         else if (ch === '"') inString = false;
         continue;
       }
-      // Only track strings inside an object (depth > 0). At depth 0 we're skipping a
-      // junk prefix (e.g. a terminal-notify escape), and an unmatched `"` there must
-      // not swallow the real `{...}` that follows in the same chunk.
       if (ch === '"') { if (depth > 0) inString = true; continue; }
       if (ch === "{") {
         if (depth === 0) start = i;
@@ -273,21 +324,12 @@ function makeEventScanner(onObject) {
           depth -= 1;
           if (depth === 0 && start !== -1) {
             const slice = buf.slice(start, i + 1);
-            try { onObject(JSON.parse(slice)); } catch { /* not a JSON object we care about */ }
+            try { onObject(JSON.parse(slice)); } catch { /* ignore non-objects */ }
             start = -1;
           }
         }
       }
     }
-    // Retain only an in-progress object (if any) so the buffer can't grow without
-    // bound; everything already emitted or skipped is dropped. Reset the scanner
-    // state too: the next call re-derives depth/string state by scanning the
-    // retained buffer (which always begins at an object's `{`) from scratch.
-    // Without the reset, the carried-over depth double-counts the retained braces,
-    // so an object split across chunks never closes and its event is lost.
-    // ponytail: O(n^2) if a single object spans many chunks (each re-scans the
-    // retained prefix); fine for OpenCode's event sizes — switch to a suffix-only
-    // scan if it ever bites.
     buf = depth > 0 && start !== -1 ? buf.slice(start) : "";
     start = -1;
     depth = 0;
@@ -296,10 +338,31 @@ function makeEventScanner(onObject) {
   };
 }
 
+function extractSessionId(event) {
+  // grok's streaming-json carries sessionId (camelCase) on the end event; the
+  // extra fallbacks tolerate a shape drift across versions.
+  return (
+    event.sessionId ??
+    event.session_id ??
+    (event.session && (event.session.id ?? event.session.sessionId)) ??
+    null
+  );
+}
+
+function extractTextChunk(event) {
+  // grok streams the assistant reply as {"type":"text","data":"…"}; reasoning
+  // arrives as type:"thought" and is deliberately kept out of the report.
+  // The type:"text"+event.text fallback covers a possible field rename.
+  if (event.type !== "text") return null;
+  if (typeof event.data === "string") return event.data;
+  if (typeof event.text === "string") return event.text;
+  return null;
+}
+
 function prepareRunDir(opts, brief) {
   const startedAt = new Date().toISOString();
   // Default the run dir to system temp so the repo under review stays pristine —
-  // the touched-files report must show only OpenCode's edits, not relay's artifacts.
+  // the touched-files report must show only Grok's edits, not relay's artifacts.
   const outDir = opts.outDir || join(tmpdir(), "delegate-relay", `${basename(opts.cd) || "repo"}-${timestamp()}`);
   mkdirSync(outDir, { recursive: true });
   const run = {
@@ -319,16 +382,15 @@ function makeResultWriter(opts, version, run) {
   // standing metadata, persists result.json, and returns the object it just
   // wrote so the caller can hand it straight to printSummary.
   return (extra) => {
-    const resuming = Boolean(opts.session || opts.resumeLast);
     const result = {
       schema: "delegate-relay.result.v1",
-      tool: "opencode",
+      tool: "grok",
       workdir: opts.cd,
-      agent: resuming ? "(inherited from resumed session)" : opts.agent,
+      autonomy: opts.autonomy,
       model: opts.model,
-      auto: opts.auto,
+      effort: opts.effort,
       resumeLast: opts.resumeLast,
-      opencodeVersion: version,
+      grokVersion: version,
       startedAt: run.startedAt,
       finishedAt: new Date().toISOString(),
       briefPath: run.briefPath,
@@ -342,56 +404,47 @@ function makeResultWriter(opts, version, run) {
 }
 
 function reportUnavailable(writeResult, resultPath) {
-  const result = writeResult({ status: "opencode_unavailable", exitCode: 127, signal: null, sessionId: null, finalMessage: "", touchedFiles: null, cost: null });
+  const result = writeResult({ status: "grok_unavailable", exitCode: 127, signal: null, sessionId: null, finalMessage: "", usage: null, touchedFiles: null });
   printSummary(result, resultPath);
-  process.stderr.write("relay: `opencode` not found on PATH. Install it (npm i -g opencode-ai) and run `opencode auth login`.\n");
+  process.stderr.write("relay: `grok` not found on PATH. Install it with `npm i -g @xai-official/grok` and run `grok login`.\n");
   process.exit(127);
 }
 
-function dispatchToOpenCode(opts, brief, run, writeResult) {
-  const argv = buildArgv(opts);
-  // Pin the working root two ways: `cwd` sets the child's real directory, and PWD
-  // is set explicitly because OpenCode can resolve its project root from the
-  // inherited PWD env — which spawn does NOT rewrite — so without it a run could
-  // operate on the orchestrator's directory instead of opts.cd (and, with --auto
-  // on, edit it unattended). Passing the path via env, not argv, keeps it clear of
-  // shell quoting.
-  // shell:true on Windows so the opencode.cmd shim resolves (see opencodeVersion).
-  // Safe: the brief is fed via child.stdin below — never argv — and argv holds only
-  // flag names, an agent enum, a model string, and a session id, with no shell
-  // metacharacters or spaceable paths.
-  const child = spawn("opencode", argv, {
+function dispatchToGrok(opts, run, writeResult) {
+  // grok cannot be prevented from writing headlessly (the read-only sandbox and
+  // plan mode are advisory), so a --read-only run snapshots the tree up front
+  // and flags a violation in the result instead of pretending to enforce.
+  const beforeTree = opts.autonomy === "read-only" ? gitTouchedFiles(opts.cd) : null;
+  // every result that reports touchedFiles carries the verdict, aborted runs included -
+  // an aborted --read-only review can still have modified the tree
+  const readOnlyFlag = (touched) =>
+    opts.autonomy === "read-only"
+      ? { readOnlyViolation: beforeTree !== null && touched !== null && JSON.stringify(beforeTree) !== JSON.stringify(touched) }
+      : {};
+  const argv = buildArgv(opts, run);
+  // shell:true on Windows so the grok.cmd shim resolves (see grokVersion). Safe:
+  // the brief is delivered via --prompt-file (never argv), --model/--effort/--session
+  // are restricted to safe tokens at parse time, and the two path args are
+  // quoted for win32 in buildArgv.
+  const child = spawn("grok", argv, {
     cwd: opts.cd,
-    env: { ...process.env, PWD: opts.cd },
-    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env },
+    stdio: ["ignore", "pipe", "pipe"],
     shell: process.platform === "win32",
     detached: process.platform !== "win32", // POSIX: lead a new process group so killChild can fell the whole tree
   });
 
   let sessionId = opts.session || null;
-  let totalCost = 0;
-  let sawCost = false;
-  const textParts = new Map(); // part.id -> latest text
-  const textOrder = []; // part.ids in first-seen order
+  let usage = null;
+  const textChunks = [];
   const stderrTail = [];
 
   const scan = makeEventScanner((event) => {
-    // Session id: real events carry `sessionID` (camelCase); plugin notify objects
-    // carry `session_id` (snake_case). Accept either.
-    const sid = event.sessionID || event.session_id;
+    const sid = extractSessionId(event);
     if (sid) sessionId = sid;
-    // Assistant text lives in `type:"text"` events under part.text. Key by part.id
-    // so streamed updates to the same part replace rather than duplicate; preserve
-    // first-seen order so multi-segment messages assemble correctly.
-    if (event.type === "text" && event.part && event.part.type === "text") {
-      const id = event.part.id || `anon-${textOrder.length}`;
-      if (!textParts.has(id)) textOrder.push(id);
-      textParts.set(id, event.part.text ?? "");
-    }
-    if (event.type === "step_finish" && event.part && typeof event.part.cost === "number") {
-      totalCost += event.part.cost;
-      sawCost = true;
-    }
+    const chunk = extractTextChunk(event);
+    if (chunk) textChunks.push(chunk);
+    if (event.usage && typeof event.usage === "object") usage = event.usage;
   });
 
   // Decode across chunk boundaries: a multibyte UTF-8 character split between
@@ -400,12 +453,12 @@ function dispatchToOpenCode(opts, brief, run, writeResult) {
   const stderrDecoder = new StringDecoder("utf8");
 
   child.stdout.on("data", (chunk) => {
-    appendFileSync(run.eventsPath, chunk); // faithful raw record of the event stream
+    appendFileSync(run.eventsPath, chunk); // faithful raw record
     scan(stdoutDecoder.write(chunk));
   });
 
   child.stderr.on("data", (chunk) => {
-    process.stderr.write(chunk); // surface OpenCode progress live for the orchestrator
+    process.stderr.write(chunk); // surface Grok progress live for the orchestrator
     const text = stderrDecoder.write(chunk);
     for (const line of text.split("\n")) {
       if (line.trim()) stderrTail.push(line.trimEnd());
@@ -414,7 +467,7 @@ function dispatchToOpenCode(opts, brief, run, writeResult) {
   });
 
   const assembleFinal = () => {
-    const message = textOrder.map((id) => textParts.get(id)).join("").trim();
+    const message = textChunks.join("").trim();
     if (message) writeFileSync(run.finalPath, message, "utf8");
     return message;
   };
@@ -445,23 +498,25 @@ function dispatchToOpenCode(opts, brief, run, writeResult) {
 
   // The relay's own death must still produce a result: without this, a kill from the
   // orchestrator's side (its command timeout, a stopped task, a closed terminal) writes
-  // no result.json and leaves the opencode child running or dying mid-edit with nothing
+  // no result.json and leaves the grok child running or dying mid-edit with nothing
   // recording why. SIGTERM/SIGHUP registration is a no-op on Windows; SIGINT works there.
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
     process.on(sig, () => {
       if (settled) return;
       settled = true;
       clearWatchdog();
+      const touchedAtAbort = gitTouchedFiles(opts.cd);
       const abortedFields = {
         status: "aborted",
         exitCode: 128 + (constants.signals[sig] || 15),
         signal: sig,
         sessionId,
         finalMessage: assembleFinal(),
-        touchedFiles: gitTouchedFiles(opts.cd),
-        cost: sawCost ? Number(totalCost.toFixed(6)) : null,
+        usage,
+        touchedFiles: touchedAtAbort,
+        ...readOnlyFlag(touchedAtAbort),
         stderrTail: stderrTail.slice(-20),
-        error: `the relay was killed by ${sig}; opencode was terminated with it — inspect the working tree before re-dispatching`,
+        error: `the relay was killed by ${sig}; grok was terminated with it — inspect the working tree before re-dispatching`,
       };
       const result = writeResult(abortedFields);
       printSummary(result, run.resultPath);
@@ -470,7 +525,8 @@ function dispatchToOpenCode(opts, brief, run, writeResult) {
         killChild(child, "SIGKILL");
         // the child may flush files during the grace window; refresh the snapshot so the
         // artifact matches the tree the orchestrator will actually find
-        writeResult({ ...abortedFields, touchedFiles: gitTouchedFiles(opts.cd) });
+        const touchedAfterGrace = gitTouchedFiles(opts.cd);
+        writeResult({ ...abortedFields, touchedFiles: touchedAfterGrace, ...readOnlyFlag(touchedAfterGrace) });
         process.exit(result.exitCode);
       }, 2000);
     });
@@ -480,7 +536,16 @@ function dispatchToOpenCode(opts, brief, run, writeResult) {
     if (settled) return;
     settled = true;
     clearWatchdog();
-    const result = writeResult({ status: "failed", exitCode: 1, signal: null, sessionId, finalMessage: assembleFinal(), touchedFiles: gitTouchedFiles(opts.cd), cost: sawCost ? totalCost : null, error: String(err && err.message ? err.message : err) });
+    const result = writeResult({
+      status: "failed",
+      exitCode: 1,
+      signal: null,
+      sessionId,
+      finalMessage: assembleFinal(),
+      usage,
+      touchedFiles: gitTouchedFiles(opts.cd),
+      error: String(err && err.message ? err.message : err),
+    });
     printSummary(result, run.resultPath);
     process.exit(1);
   });
@@ -493,7 +558,8 @@ function dispatchToOpenCode(opts, brief, run, writeResult) {
     // parent is down, sweep the group (no-op where taskkill already felled the tree)
     if (watchdogFired) killChild(child, "SIGKILL");
     const finalMessage = assembleFinal();
-    // A timed-out run is never a success even if opencode handles SIGTERM by exiting 0 -
+    const touchedFiles = gitTouchedFiles(opts.cd);
+    // A timed-out run is never a success even if grok handles SIGTERM by exiting 0 -
     // orchestrators key off status and the relay exit code.
     const succeeded = code === 0 && !watchdogFired;
     const mapped = code ?? (constants.signals[signal] ? 128 + constants.signals[signal] : 1);
@@ -503,38 +569,23 @@ function dispatchToOpenCode(opts, brief, run, writeResult) {
       signal: signal ?? null,
       sessionId,
       finalMessage,
-      touchedFiles: gitTouchedFiles(opts.cd),
-      cost: sawCost ? Number(totalCost.toFixed(6)) : null,
+      usage,
+      touchedFiles,
+      ...readOnlyFlag(touchedFiles),
       ...(succeeded ? {} : { stderrTail: stderrTail.slice(-20) }),
-      ...(watchdogFired ? { error: `opencode did not finish within --timeout ${opts.timeout}; killed by the relay watchdog` } : {}),
+      ...(watchdogFired ? { error: `grok did not finish within --timeout ${opts.timeout}; killed by the relay watchdog` } : {}),
     });
     printSummary(result, run.resultPath);
     process.exit(result.exitCode);
   });
-
-  // If the child failed to launch, writing to its stdin can emit a stray 'error'
-  // on the pipe; the 'error' handler above owns that outcome, so swallow it here.
-  child.stdin.on("error", () => {});
-  child.stdin.write(brief);
-  child.stdin.end();
 }
 
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   const brief = readBrief(opts);
   if (!brief.trim()) fail("empty brief (pass --brief <file> or pipe the brief on stdin)");
-  // --session pins a specific session and --resume-last picks the most recent; passing both is a
-  // contradiction, and buildArgv would silently prefer --session. Reject it rather than guess.
-  if (opts.session && opts.resumeLast) {
-    fail("--session and --resume-last are mutually exclusive; pass only one");
-  }
-  // OpenCode has no safe default model (a bare `opencode run` errors), so a fresh run must name one.
-  // A resumed run inherits its session's model, so --model is optional there.
-  if (!opts.model && !opts.resumeLast && !opts.session) {
-    fail("no model given: pass --model provider/model — opencode has no safe default (e.g. a plan you're subscribed to, like opencode-go/kimi-k2.7-code)");
-  }
 
-  const version = opencodeVersion();
+  const version = grokVersion();
   const run = prepareRunDir(opts, brief);
   const writeResult = makeResultWriter(opts, version, run);
 
@@ -543,18 +594,25 @@ function main() {
     return;
   }
 
-  dispatchToOpenCode(opts, brief, run, writeResult);
+  dispatchToGrok(opts, run, writeResult);
 }
 
 function printSummary(result, resultPath) {
   const lines = [];
   lines.push("");
-  lines.push(`relay: ${result.status} (exit ${result.exitCode}${result.signal ? `, killed by ${result.signal}` : ""})  ·  opencode ${result.opencodeVersion ?? "?"}`);
-  if (result.signal === "SIGKILL" && result.status === "failed") lines.push("hint: the host killed the process (commonly the OOM killer or a supervisor timeout) — this is not an opencode error; check host memory and re-dispatch, or split the task into smaller briefs.");
-  if (result.signal === "SIGTERM" && result.status === "failed") lines.push("hint: something outside the relay terminated opencode (a supervisor, the session ending, or a manual kill) — when the relay itself does the killing it reports status \"timeout\" or \"aborted\" instead; inspect the working tree before re-dispatching.");
-  if (result.resumeLast || result.agent === "(inherited from resumed session)") lines.push("mode: resumed existing session");
-  if (result.sessionId) lines.push(`session id (resume with: --session ${result.sessionId}): ${result.sessionId}`);
-  if (typeof result.cost === "number") lines.push(`cost: $${result.cost}`);
+  lines.push(`relay: ${result.status} (exit ${result.exitCode}${result.signal ? `, killed by ${result.signal}` : ""})  ·  grok ${result.grokVersion ?? "?"}`);
+  if (result.signal === "SIGKILL" && result.status === "failed") lines.push("hint: the host killed the process (commonly the OOM killer or a supervisor timeout) — this is not a grok error; check host memory and re-dispatch, or split the task into smaller briefs.");
+  if (result.signal === "SIGTERM" && result.status === "failed") lines.push("hint: something outside the relay terminated grok (a supervisor, the session ending, or a manual kill) — when the relay itself does the killing it reports status \"timeout\" or \"aborted\" instead; inspect the working tree before re-dispatching.");
+  if (result.readOnlyViolation) lines.push("warning: this --read-only run modified the working tree — grok's read-only is best-effort; review the diff before trusting the run.");
+  lines.push(`autonomy: ${result.autonomy}`);
+  if (result.resumeLast) lines.push("mode: resumed most recent session (--continue)");
+  else if (result.sessionId && result.status !== "grok_unavailable") {
+    lines.push(`session id (resume with: --session ${result.sessionId}): ${result.sessionId}`);
+  }
+  if (result.usage) {
+    const u = result.usage;
+    lines.push(`tokens: ${u.total_tokens ?? "?"} total (in ${u.input_tokens ?? "?"}, out ${u.output_tokens ?? "?"})`);
+  }
   const touched = result.touchedFiles;
   if (touched === null) {
     lines.push("touched files: git unavailable — inspect the working tree directly");
@@ -568,7 +626,7 @@ function printSummary(result, resultPath) {
     for (const line of result.stderrTail.slice(-8)) lines.push(`  ${line}`);
   }
   lines.push("");
-  lines.push("--- opencode final report ---");
+  lines.push("--- grok final report ---");
   lines.push(result.finalMessage || "(no final message captured)");
   lines.push("--- end report ---");
   lines.push("");
