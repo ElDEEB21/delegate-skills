@@ -198,7 +198,7 @@ function gitTouchedFiles(cwd) {
   // --skip-git-repo-check — so the caller can tell "git unavailable" apart from
   // "Codex changed nothing." [] means git ran and the working tree is clean.
   try {
-    const out = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" });
+    const out = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     return out.split("\n").map((line) => line.trimEnd()).filter(Boolean);
   } catch {
     return null;
