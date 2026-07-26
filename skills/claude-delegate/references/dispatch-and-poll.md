@@ -83,7 +83,9 @@ exception: the relay pre-approves PowerShell because no Claude shell sandbox is 
 
 The generated `profile.json`:
 
-- denies direct shell forms of `git commit`, `git push`, nested `claude`, and `claude-delegate`;
+- uses string rules to deny common direct shell forms of `git commit`, `git push`, and nested
+  `claude`, plus any command containing `claude-delegate`; aliases, scripts, and wrappers can bypass
+  these speed bumps, so the brief's no-commit instruction and orchestrator review remain the boundary;
 - on macOS, Linux, and WSL2, enables Claude's Bash sandbox with `failIfUnavailable: true`,
   `autoAllowBashIfSandboxed: true`, `allowUnsandboxedCommands: false`, and filesystem isolation
   explicitly enabled;

@@ -120,9 +120,9 @@ The normal profile is deliberately explicit:
 - Configured MCP discovery and Claude.ai connectors are disabled, all MCP tools are denied, and
   skills, commands, and Claude's Agent tool are unavailable to the child. Project `CLAUDE.md`, hooks,
   normal authentication, session persistence, and other local settings still load.
-- Direct shell forms of `git commit`, `git push`, nested `claude`, and `claude-delegate` are denied;
-  the brief must still tell the implementer to leave the tree uncommitted and avoid delegation
-  recursion.
+- String rules deny common direct shell forms of `git commit`, `git push`, and nested `claude`, plus
+  any command containing `claude-delegate`. Aliases, scripts, and wrappers can bypass them, so they
+  are only a speed bump; the brief's no-commit instruction and orchestrator review remain the boundary.
 
 Native Windows does not support Claude's shell sandbox. The relay restricts the tool surface and
 pre-approves PowerShell so the run remains non-interactive, but that shell is not OS-isolated. Native

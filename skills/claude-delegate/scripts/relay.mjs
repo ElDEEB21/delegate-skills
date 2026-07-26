@@ -13,9 +13,11 @@
  * tree. Claude authenticates and makes its own network calls exactly as it does
  * at the terminal.
  *
- * The relay never commits. Its write-capable profiles also deny direct
- * `git commit`, `git push`, nested `claude`, and `claude-delegate` shell
- * commands. The orchestrator reviews the diff, re-runs the project gates, and
+ * The relay never commits. Its write-capable profiles use string rules to deny
+ * common direct forms of `git commit`, `git push`, and nested `claude`, plus
+ * any command containing `claude-delegate`. Aliases, scripts, and wrappers can
+ * bypass those speed bumps; the brief's no-commit instruction and orchestrator
+ * review remain the boundary. The orchestrator re-runs the project gates and
  * lands the work.
  *
  * Normal runs use Claude's `acceptEdits` permission mode with an explicit tool
@@ -380,11 +382,19 @@ function profileSettings(opts) {
       deny: opts.readOnly
         ? []
         : [
+            // Two-wildcard git forms require text after the subcommand, so the
+            // single-wildcard forms also catch `git -C <dir> push`; they also
+            // deny reads like `git log --grep push`. Anchor `claude` at command
+            // position so reads mentioning it remain allowed. Keep
+            // `claude-delegate` as a substring rule to stop recursive relay
+            // invocation; any command containing it is denied.
             `${shell}(git commit *)`,
             `${shell}(git * commit *)`,
+            `${shell}(git * commit)`,
             `${shell}(git push *)`,
             `${shell}(git * push *)`,
-            `${shell}(*claude *)`,
+            `${shell}(git * push)`,
+            `${shell}(claude *)`,
             `${shell}(*claude-delegate*)`,
           ],
     },
