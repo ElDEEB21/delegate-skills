@@ -299,6 +299,16 @@ check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 // opencode refuses a fresh run without an explicit model
 const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [] };
 
+// ---- agy --timeout is validated before it can silently fire ----
+// parseDuration returns null for a malformed value, and setTimeout(fn, null) fires on the next
+// tick: an unvalidated flag would turn a typo into an instant, silent "timeout".
+for (const bad of ["NONSENSE", "0s", "", "10"]) {
+  const badRun = spawnSync(process.execPath,
+    [relayPath("agy"), "--brief", briefPath, "--timeout", bad],
+    { env: baseEnv, encoding: "utf8" });
+  check(`agy timeout: "${bad}" is rejected`, badRun.status === 2);
+}
+
 // ---- Qoder's documented print-mode argv and structured result ----
 {
   const outDir = join(scratch, "out-success-qoder");

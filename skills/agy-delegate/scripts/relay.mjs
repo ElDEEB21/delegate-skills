@@ -42,7 +42,11 @@
  *   --sandbox               Enable Antigravity's terminal sandbox for this run.
  *   --dangerously-skip-permissions
  *                           Auto-approve Antigravity tool permission requests. Use only with human approval.
- *   --print-timeout <dur>   Timeout for print mode (default: 30m).
+ *   --print-timeout <dur>   Timeout agy itself applies to print mode (default: 30m).
+ *   --timeout <dur>         Relay-side watchdog, h/m/s like 30m (default: --print-timeout
+ *                           plus a 60s grace). On expiry the agy process tree is killed and
+ *                           result.json gets status "timeout". Set it explicitly when agy
+ *                           may hang past its own print timeout.
  *   --add-dir <dir>         Add an extra workspace directory. Repeatable.
  *   --out-dir <dir>         Where to write run artifacts (default: a fresh dir under
  *                           the system temp dir, so the repo under review stays clean).
@@ -90,6 +94,7 @@ function parseArgs(argv) {
     sandbox: false,
     dangerouslySkipPermissions: false,
     printTimeout: DEFAULT_PRINT_TIMEOUT,
+    timeout: null,
     addDirs: [],
     outDir: null,
   };
@@ -117,6 +122,7 @@ function parseArgs(argv) {
       case "--sandbox": opts.sandbox = true; break;
       case "--dangerously-skip-permissions": opts.dangerouslySkipPermissions = true; break;
       case "--print-timeout": opts.printTimeout = next(); break;
+      case "--timeout": opts.timeout = next(); break;
       case "--add-dir": opts.addDirs.push(next()); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
       default:
@@ -125,6 +131,15 @@ function parseArgs(argv) {
   }
   if (opts.resumeLast && opts.conversation) {
     fail("--resume-last and --conversation are mutually exclusive; pass only one");
+  }
+  // A malformed --timeout must fail loudly: parseDuration returns null for it, and a null
+  // delay makes setTimeout fire on the next tick - a silent instant "timeout", the worst
+  // failure mode a watchdog has. Zero is rejected for the same reason.
+  if (opts.timeout !== null) {
+    const milliseconds = parseDuration(opts.timeout);
+    if (milliseconds === null || milliseconds <= 0) {
+      fail(`--timeout "${opts.timeout}" is not a positive duration; use h/m/s strings like 30m, 90s, or 1h30m`);
+    }
   }
   if (opts.project && (opts.resumeLast || opts.conversation)) {
     fail("--project cannot be combined with --resume-last or --conversation");
@@ -338,7 +353,10 @@ function reportUnavailable(writeResult, resultPath) {
 
 function dispatchToAgy(opts, brief, run, writeResult) {
   const argv = buildArgv(opts, brief, run);
-  const timeoutMs = parseDuration(opts.printTimeout) ?? parseDuration(DEFAULT_PRINT_TIMEOUT);
+  const printTimeoutMs = parseDuration(opts.printTimeout) ?? parseDuration(DEFAULT_PRINT_TIMEOUT);
+  // An explicit --timeout wins over the default print-timeout-plus-grace: agy can hang well
+  // past its own print timeout, which is exactly the case the grace window cannot cover.
+  const watchdogMs = opts.timeout !== null ? parseDuration(opts.timeout) : printTimeoutMs + 60_000;
   // Antigravity's installer provides a native `agy` binary. Launch directly so
   // multi-line briefs and paths with spaces are passed as argv, not shell text.
   const child = spawn("agy", argv, {
@@ -363,7 +381,7 @@ function dispatchToAgy(opts, brief, run, writeResult) {
     sigkillTimer = setTimeout(() => {
       if (!settled) killChild(child, "SIGKILL");
     }, 10_000);
-  }, timeoutMs + 60_000);
+  }, watchdogMs);
 
   // The relay's own death must still produce a result: without this, a kill from the
   // orchestrator's side (its command timeout, a stopped task, a closed terminal) writes
@@ -458,7 +476,13 @@ function dispatchToAgy(opts, brief, run, writeResult) {
       finalMessage,
       touchedFiles: gitTouchedFiles(opts.cd),
       ...(succeeded ? {} : { stderrTail: stderrTail.slice(-20) }),
-      ...(watchdogFired ? { error: `agy did not exit within --print-timeout ${opts.printTimeout} plus 60s grace; killed by the relay watchdog` } : {}),
+      ...(watchdogFired
+        ? {
+            error: opts.timeout !== null
+              ? `agy did not finish within --timeout ${opts.timeout}; killed by the relay watchdog`
+              : `agy did not exit within --print-timeout ${opts.printTimeout} plus 60s grace; killed by the relay watchdog`,
+          }
+        : {}),
     });
     printSummary(result, run.resultPath);
     process.exit(result.exitCode);
