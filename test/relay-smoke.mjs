@@ -37,7 +37,7 @@
  * Node built-ins only.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, mkdirSync, copyFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, chmodSync, mkdirSync, copyFileSync } from "node:fs";
 import { join, delimiter, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -279,6 +279,7 @@ const runRelay = (skill, workDir, outDir, extraArgs, extraEnv) =>
 
 const result = (outDir) => JSON.parse(readFileSync(join(outDir, "result.json"), "utf8"));
 
+
 // ---- codex effort is validated, forwarded, and recorded ----
 const effortOutDir = join(scratch, "out-effort-codex");
 const effortArgsFile = join(scratch, "args-effort-codex");
@@ -298,6 +299,20 @@ check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 
 // opencode refuses a fresh run without an explicit model
 const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [] };
+
+// ---- every relay publishes result.json atomically ----
+// A poller that waits for the file must never read a half-written one: each relay writes a
+// pid-suffixed temporary and renames it into place, so no .tmp file may survive a finished run.
+for (const skill of SKILLS) {
+  const atomicOutDir = join(scratch, `out-atomic-${skill}`);
+  const atomicWorkDir = freshRepo(`work-atomic-${skill}`);
+  spawnSync(process.execPath,
+    [relayPath(skill), "--brief", briefPath, "--cd", atomicWorkDir, "--out-dir", atomicOutDir, ...EXTRA_ARGS[skill]],
+    { env: { ...baseEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: join(scratch, `args-atomic-${skill}`) }, encoding: "utf8" });
+  const leftovers = existsSync(atomicOutDir) ? readdirSync(atomicOutDir).filter((f) => f.includes(".tmp")) : [];
+  check(`${skill} atomic: result.json exists`, existsSync(join(atomicOutDir, "result.json")));
+  check(`${skill} atomic: no temporary result file survives the run`, leftovers.length === 0);
+}
 
 // ---- Qoder's documented print-mode argv and structured result ----
 {
