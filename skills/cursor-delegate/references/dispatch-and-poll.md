@@ -112,6 +112,16 @@ A pre-run usage error exits 2 and writes no result. A missing `cursor-agent` exi
   needed (on Windows a single process-tree kill).
 - **Empty `finalMessage`:** inspect `touchedFiles` and the diff. Add a
   `<structured_output_contract>` to the next brief to require a closing report.
+- **Every command Cursor runs is rejected with "Hook blocked with message: … eval: … syntax error
+  near unexpected token `&`" (or Cursor reports "the terminal hook failed"):** a cursor-agent bug,
+  not a hook bug. When cursor-agent is launched from a Git Bash (MSYS) console on Windows — which
+  is what an orchestrator's bash tool uses — it selects `bash.exe` as its persistent shell while
+  still generating its hook wrappers in PowerShell syntax, so every configured hook (its own
+  `~/.cursor/hooks.json` and any imported Claude Code `PreToolUse` hooks) errors and Cursor blocks
+  the command, fail-closed. File edits still work; command execution does not — which also means
+  Cursor cannot run the gates, only claim it could not. Workaround: dispatch the relay from a
+  PowerShell or cmd console instead (observed fixed there); or temporarily remove the hook entries
+  for the run. Verified on cursor-agent 2026.07.23.
 
 ## Recovering lost work
 

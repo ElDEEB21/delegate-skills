@@ -86,6 +86,12 @@ Trust process state and the working tree over a progress display. Completion mea
 and `result.json` exists. Cursor's full report is the `finalMessage` field in `result.json` (also
 printed in full on stdout between the report markers).
 
+**Windows + hooks caveat:** if the user has Cursor hooks configured (`~/.cursor/hooks.json`, or
+Claude Code `PreToolUse` hooks, which cursor-agent imports), dispatching from a Git Bash (MSYS)
+console makes cursor-agent feed PowerShell-syntax hook wrappers to bash, so every command Cursor
+tries to run is blocked — edits still land, gates do not run. Dispatch from a PowerShell or cmd
+console instead. Details: [references/dispatch-and-poll.md](references/dispatch-and-poll.md).
+
 ### 4. Review — do not trust the self-report
 
 Treat Cursor's final message and gate claims as claims:
