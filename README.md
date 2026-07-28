@@ -6,7 +6,7 @@ Skills for **delegating coding work to a separate CLI agent and landing it yours
 orchestrator) writes a self-contained brief, dispatches it to an implementer CLI, then reviews the diff
 and commits — staying the reviewer the whole way.
 
-Seven skills ship today — same loop, different implementer:
+Eight skills ship today — same loop, different implementer:
 
 | Skill | Drives | Autonomy | Resume |
 | --- | --- | --- | --- |
@@ -17,6 +17,7 @@ Seven skills ship today — same loop, different implementer:
 | `grok-delegate` | Grok Build CLI (`grok`) | explicit: default workspace-scoped, `--read-only` best-effort with violation detection, `--full-access` opt-in | `--resume-last`, `--session <id>` |
 | `kimi-delegate` | Kimi Code CLI (`kimi`) | headless runs always use Kimi's auto permission mode | `--resume-last`, `--session <id>` |
 | `qoder-delegate` | [Qoder CLI](https://docs.qoder.com/en/cli/quick-start) (`qodercli`) | `auto` default; bypass is opt-in; effective mode is reported | `--resume-last`, `--resume <id>` |
+| `cursor-delegate` | [Cursor Agent CLI](https://cursor.com/cli) (`cursor-agent`) | `--force` write default; `--read-only` is Cursor's plan mode with a violation tripwire; `--trust` always | `--resume-last`, `--session <id>` |
 
 ## Install
 
@@ -126,6 +127,16 @@ models that support explicit sizing. Non-interactive runs use Qoder's `auto` per
 default; bypass remains opt-in. Qoder falls back to `default` outside a trusted directory, so the
 relay records both the requested and effective modes.
 
+### cursor-delegate
+
+Same loop for the Cursor Agent CLI (`cursor-agent`). The brief rides stdin (no process-list
+exposure, no argv-size cap). A fresh run is write-capable with `--force` — Cursor runs commands
+without approval unless the user's Cursor config denies them — and `--read-only` switches to
+Cursor's plan mode, backed by a porcelain tripwire that flags `readOnlyViolation: true` if a
+read-only run wrote anyway. The relay always passes `--trust`, so `--cd` must only point at
+repositories the user trusts. The model Cursor actually served and the permission mode it applied
+are recorded in `result.json` as `resolvedModel` and `permissionMode`.
+
 ### gemini-delegate
 
 *Planned.* A delegate skill for the Gemini CLI, if and when it gains a comparable non-interactive mode.
@@ -193,7 +204,14 @@ This package is intentionally inspectable:
   macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model
   and 32768-token context window, no commit).
 - `opencode-delegate` — requires `--model`, since OpenCode has no safe default.
-- Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); the Qoder
+- `cursor-delegate` — verified end-to-end on Windows against a current `cursor-agent` (write run
+  under `--force` editing real files; plan-mode `--read-only` run touching nothing, with the
+  porcelain tripwire false on the clean run; `--session <id>` resume applying a delta brief in the
+  same session; usage errors exiting 2 without a result file). CI drives its launch, timeout, and
+  abort paths against a stand-in binary on Linux and Windows; a native macOS/Linux launch of the
+  real CLI is designed-for but not yet run.
+- Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); the cursor
+  launch serializes a pre-joined, quoted command string through the shell for the same shim; the Qoder
   relay targets its currently documented native `qodercli.exe`. Native Windows launch smokes for
   `claude`/`agy`/`grok`/`kimi`/`qoder` are still pending. Claude's own shell sandbox is unsupported on
   native Windows regardless of launch mechanics.

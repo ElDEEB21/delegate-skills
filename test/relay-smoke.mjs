@@ -7,10 +7,10 @@
  * not complete:
  *
  *   1. timeout  — the watchdog kills the implementer's WHOLE process tree and
- *                 result.json reports status "timeout". Driven for all seven
- *                 relays on both platforms. On Windows, claude launches a .cmd
- *                 shim through a serialized cmd.exe invocation, while
- *                 codex/opencode/grok use shell:true. These are exactly the
+ *                 result.json reports status "timeout". Driven for all eight
+ *                 relays on both platforms. On Windows, claude and cursor
+ *                 launch a .cmd shim through a serialized cmd.exe invocation,
+ *                 while codex/opencode/grok use shell:true. These are exactly the
  *                 cases a plain child.kill would miss; agy, kimi, and qoder spawn a
  *                 native binary directly — a .cmd stand-in cannot represent them,
  *                 so the smoke compiles a real fake .exe with the C# compiler
@@ -25,7 +25,7 @@
  *   2. aborted  — killing the relay itself still produces result.json with
  *                 status "aborted", and files the implementer flushes during
  *                 the shutdown grace window appear in the refreshed
- *                 touchedFiles. Driven for all seven relays on POSIX; Windows
+ *                 touchedFiles. Driven for all eight relays on POSIX; Windows
  *                 delivers no catchable SIGTERM, so the scenario cannot be
  *                 driven there (the skill docs carry the same caveat).
  *
@@ -43,8 +43,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder"];
-const binaryName = (skill) => skill === "qoder" ? "qodercli" : skill;
+const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder", "cursor"];
+const binaryName = (skill) => skill === "qoder" ? "qodercli" : skill === "cursor" ? "cursor-agent" : skill;
 const relayPath = (skill) => join(here, "..", "skills", `${skill}-delegate`, "scripts", "relay.mjs");
 const WIN = process.platform === "win32";
 let failed = 0;
@@ -233,8 +233,8 @@ const shimDir = join(scratch, "shim");
 mkdirSync(shimDir);
 writeFileSync(join(shimDir, "fake-cli.cjs"), FAKE);
 if (WIN) {
-  for (const skill of ["claude", "codex", "opencode", "grok"]) {
-    writeFileSync(join(shimDir, `${skill}.cmd`), `@node "%~dp0fake-cli.cjs" %*\r\n`);
+  for (const skill of ["claude", "codex", "opencode", "grok", "cursor"]) {
+    writeFileSync(join(shimDir, `${binaryName(skill)}.cmd`), `@node "%~dp0fake-cli.cjs" %*\r\n`);
   }
   const windir = process.env.WINDIR || "C:\\Windows";
   const csc = [
@@ -297,7 +297,7 @@ const emptyEffortRun = spawnSync(process.execPath,
 check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 
 // opencode refuses a fresh run without an explicit model
-const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [] };
+const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [], cursor: [] };
 
 // ---- Qoder's documented print-mode argv and structured result ----
 {
@@ -626,6 +626,7 @@ const TIMEOUT_CASES = [
   { skill: "grok", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "kimi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "qoder", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
+  { skill: "cursor", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "agy", flags: ["--print-timeout", "1s"], exitDeadline: 120_000 },
 ];
 async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag) {
