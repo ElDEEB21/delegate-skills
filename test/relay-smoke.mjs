@@ -344,10 +344,16 @@ const bothResumeRun = spawnSync(process.execPath,
   [relayPath("codex"), "--brief", briefPath, "--session", "thread-abc", "--resume-last"],
   { env: baseEnv, encoding: "utf8" });
 check("codex session: --session with --resume-last is rejected", bothResumeRun.status === 2);
-const emptySessionRun = spawnSync(process.execPath,
-  [relayPath("codex"), "--brief", briefPath, "--session", ""],
-  { env: baseEnv, encoding: "utf8" });
-check("codex session: an empty id is rejected", emptySessionRun.status === 2);
+for (const [name, value] of [
+  ["an empty id", ""],
+  ["an option-like id", "--resume-last"],
+  ["a shell-unsafe id", "thread & whoami"],
+]) {
+  const invalidSessionRun = spawnSync(process.execPath,
+    [relayPath("codex"), "--brief", briefPath, "--session", value],
+    { env: baseEnv, encoding: "utf8" });
+  check(`codex session: ${name} is rejected`, invalidSessionRun.status === 2);
+}
 
 const emptyEffortRun = spawnSync(process.execPath,
   [relayPath("codex"), "--brief", briefPath, "--effort", ""],

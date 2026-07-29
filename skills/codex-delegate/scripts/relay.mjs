@@ -72,6 +72,7 @@ import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
+const SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -134,10 +135,10 @@ function parseArgs(argv) {
   if (opts.session !== null && opts.resumeLast) {
     fail("--session and --resume-last are mutually exclusive; pass only one");
   }
-  // An empty id is not a resume: buildArgv treats "" as falsy and would launch a fresh run
-  // while every other code path still reports the run as resumed.
-  if (opts.session !== null && !opts.session.trim()) {
-    fail("--session requires a non-empty thread id");
+  // This value reaches cmd.exe on win32 (shell:true for the codex.cmd shim), so
+  // accept only the same shell-safe session token shape used by sibling relays.
+  if (opts.session !== null && !SAFE_SESSION.test(opts.session)) {
+    fail("--session must be a shell-safe thread id (letters, digits, . _ : -)");
   }
   return opts;
 }
