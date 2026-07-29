@@ -15,10 +15,8 @@
  *                 native binary directly — a .cmd stand-in cannot represent them,
  *                 so the smoke compiles a real fake .exe with the C# compiler
  *                 that ships in-box with Windows (no install, no network) and
- *                 puts it on PATH under their names. agy's watchdog is
- *                 --print-timeout plus a fixed 60s grace, so its scenario is
- *                 the slow one (about a minute) on every platform. A POSIX
- *                 variant repeats each run with a parent that complies with
+ *                 puts it on PATH under their names. A POSIX variant repeats
+ *                 each run with a parent that complies with
  *                 SIGTERM while its grandchild ignores it — the sweep at close
  *                 must fell the survivor even though the parent's exit
  *                 cancelled the pending escalation timer.
@@ -86,7 +84,8 @@ for (const skill of SKILLS) {
 // ---- one fake CLI, planted on PATH under every relay's binary name ----
 const FAKE = `const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args.includes("--version") && ["qoder-version-hang", "vibe-version-hang"].includes(process.env.SMOKE_MODE)) {
+if ((args.includes("--version") && ["qoder-version-hang", "vibe-version-hang"].includes(process.env.SMOKE_MODE))
+    || (args[0] === "changelog" && process.env.SMOKE_MODE === "agy-version-hang")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 } else if (args.includes("--version") && ["qoder-version-fail", "vibe-version-fail"].includes(process.env.SMOKE_MODE)) {
   console.error("fake version failure");
@@ -202,7 +201,8 @@ using System.IO;
 using System.Threading;
 class FakeCli {
   static int Main(string[] args) {
-    if (Array.IndexOf(args, "--version") >= 0 && (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-hang" || Environment.GetEnvironmentVariable("SMOKE_MODE") == "vibe-version-hang")) {
+    if ((Array.IndexOf(args, "--version") >= 0 && (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-hang" || Environment.GetEnvironmentVariable("SMOKE_MODE") == "vibe-version-hang"))
+        || (args.Length > 0 && args[0] == "changelog" && Environment.GetEnvironmentVariable("SMOKE_MODE") == "agy-version-hang")) {
       Thread.Sleep(Timeout.Infinite);
       return 1;
     }
@@ -550,6 +550,37 @@ for (const skill of SKILLS) {
   if (timedOut) console.error(`${skill} atomic relay stderr:\n${stderr}`);
 }
 
+// ---- agy --timeout is validated before it can silently fire ----
+// parseDuration returns null for a malformed value, and setTimeout(fn, null) fires on the next
+// tick: an unvalidated flag would turn a typo into an instant, silent "timeout".
+for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "600h"]) {
+  const badRun = spawnSync(process.execPath,
+    [relayPath("agy"), "--brief", briefPath, "--timeout", bad],
+    { env: baseEnv, encoding: "utf8" });
+  check(`agy timeout: "${bad}" is rejected`, badRun.status === 2);
+}
+for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h30m24s", "600h"]) {
+  const badRun = spawnSync(process.execPath,
+    [relayPath("agy"), "--brief", briefPath, "--print-timeout", bad],
+    { env: baseEnv, encoding: "utf8" });
+  check(`agy print timeout: "${bad}" is rejected`, badRun.status === 2);
+}
+{
+  const outDir = join(scratch, "out-agy-version-hang");
+  const preflight = spawnSync(process.execPath, [
+    relayPath("agy"),
+    "--brief", briefPath,
+    "--out-dir", outDir,
+    "--timeout", "1s",
+  ], { env: { ...baseEnv, SMOKE_MODE: "agy-version-hang" }, encoding: "utf8", timeout: 5000 });
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check("agy preflight: explicit watchdog bounds a hung version probe",
+    preflight.status === 124 &&
+    value.status === "timeout" &&
+    value.error?.includes("version preflight") &&
+    value.error?.includes("was not dispatched"));
+}
+
 // ---- Qoder's documented print-mode argv and structured result ----
 {
   const outDir = join(scratch, "out-success-qoder");
@@ -868,8 +899,8 @@ for (const scenario of [
 }
 
 // ---- 1. the watchdog fells the whole tree ----
-// agy's watchdog flag is --print-timeout, and it always adds a fixed 60s grace on top,
-// so its run needs about a minute wherever it executes.
+// Use agy's explicit watchdog here: this is the path that bounds a server-side hang
+// beyond agy's own --print-timeout, and it keeps the shared smoke fast.
 const TIMEOUT_CASES = [
   { skill: "claude", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "codex", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
@@ -878,7 +909,7 @@ const TIMEOUT_CASES = [
   { skill: "kimi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "qoder", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "vibe", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
-  { skill: "agy", flags: ["--print-timeout", "1s"], exitDeadline: 120_000 },
+  { skill: "agy", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
 ];
 async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag) {
   const outDir = join(scratch, `out-${tag}-${skill}`);
@@ -901,6 +932,13 @@ async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag)
     const r = result(outDir);
     check(`${skill} ${tag}: status is "timeout" (got ${r.status})`, r.status === "timeout");
     check(`${skill} ${tag}: relay exit code is non-zero`, r.exitCode !== 0);
+    if (skill === "agy") {
+      const timeoutIndex = flags.indexOf("--timeout");
+      const expectedLimit = timeoutIndex === -1
+        ? `--print-timeout ${flags[flags.indexOf("--print-timeout") + 1]} plus 60s grace`
+        : `--timeout ${flags[timeoutIndex + 1]}`;
+      check(`agy ${tag}: selected limit is named in the result`, r.error?.includes(expectedLimit));
+    }
   }
   check(`${skill} ${tag}: the implementer process is dead`,
     implementerPid !== null && await until(() => !alive(implementerPid), 20_000));
@@ -912,6 +950,12 @@ async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag)
 for (const tc of TIMEOUT_CASES) {
   await driveTimeout(tc, "timeout", {}, "timeout");
 }
+await driveTimeout(
+  { skill: "agy", flags: ["--print-timeout", "1s", "--timeout", "4s"], exitDeadline: 45_000 },
+  "timeout",
+  {},
+  "timeout-precedence",
+);
 
 // A compliant parent must not shield a defiant descendant: the parent exits on the group
 // SIGTERM, its grandchild ignores it, and the sweep at close must still fell the grandchild
