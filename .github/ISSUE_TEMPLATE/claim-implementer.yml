@@ -6,10 +6,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        Read the [open claims](../../issues?q=is%3Aissue+label%3Aimplementer) and the
-        [open pull requests](../../pulls) first. A claim is a public note that you started — not an
+        Read the [open claims](https://github.com/amElnagdy/delegate-skills/issues?q=is%3Aissue+label%3Aimplementer) and the
+        [open pull requests](https://github.com/amElnagdy/delegate-skills/pulls) first. A claim is a public note that you started — not an
         assignment, not exclusive, and it does not expire on a schedule. The merge checklist is in
-        [CONTRIBUTING.md](../blob/master/CONTRIBUTING.md).
+        [CONTRIBUTING.md](https://github.com/amElnagdy/delegate-skills/blob/master/CONTRIBUTING.md).
   - type: input
     id: cli
     attributes:

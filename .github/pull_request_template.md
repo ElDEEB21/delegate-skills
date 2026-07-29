@@ -6,5 +6,5 @@
 README's Verification status line, so claim only what you ran — "contract-tested, live run pending"
 is a mergeable answer.
 
-**New delegate skill?** The merge checklist is in [CONTRIBUTING.md](../blob/master/CONTRIBUTING.md).
+**New delegate skill?** The merge checklist is in [CONTRIBUTING.md](https://github.com/amElnagdy/delegate-skills/blob/master/CONTRIBUTING.md).
 `node test/relay-smoke.mjs` covers the shape and the registration; the relay itself is read by hand.

@@ -36,7 +36,9 @@ jargon. Use these terms; don't invent synonyms.
 
 Banned on sight: coined umbrella terms in user-facing surfaces (README headings, `skills.sh.json`
 titles); any reference to the author's local machine or config; model/version pins (`GPT-5.x` →
-version-neutral); and claims that can't be verified ("verified" without a run → hedge or cut). Every
+version-neutral) everywhere except the README's "Verification status" list, where the exact CLI
+version a run was made against is what makes the claim checkable; and claims that can't be verified
+("verified" without a run → hedge or cut). Every
 CLI flag, field, and command in the docs must match the installed implementer CLI (`claude` /
 `codex` / `opencode` / `agy` / `grok` / `kimi` / `qodercli` / `vibe` / `cursor-agent` / `pi`) and
 the skill's `relay.mjs`.

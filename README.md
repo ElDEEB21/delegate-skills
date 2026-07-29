@@ -166,8 +166,9 @@ Per skill — platform, CLI version, and what the run exercised:
   and usage with no touched files.
 - `grok-delegate` — macOS, `grok` 0.2.101: streaming-json report capture, file-based brief delivery,
   resume; read-only is best-effort by measurement, hence the violation flag.
-- `kimi-delegate` — macOS, `kimi` 0.24.0: headless `-p` edit run, stream-json parsing,
-  `--session`/`--continue` resume.
+- `kimi-delegate` — macOS, `kimi` 0.24.0: headless `-p` edit run, stream-json parsing, and both
+  resume paths — the relay's `--session`/`--resume-last`, which drive Kimi's own `--session` and
+  `--continue`.
 - `pi-delegate` — macOS: stdin brief delivery, explicit provider and model selection, JSON
   session/provider/model/usage capture, and a `--read-only` run leaving a clean tree. Write,
   `--session`, and `--resume-last` runs are contributor-reported.

@@ -147,7 +147,8 @@ builds on the same `codex` CLI, it doesn't replace the plugin. They point in dif
   leaves to you, and what this skill encodes.
 
 If you have the plugin installed, its companion CLI is an optional alternative dispatch backend; the
-bundled `relay.mjs` is the default because it needs nothing but the `codex` binary.
+bundled `relay.mjs` is the default because it adds no install of its own beyond the `codex` binary
+(Node and `git`, which the relay also needs, are prerequisites for every skill here).
 
 ## References
 
