@@ -8,7 +8,7 @@ description: >-
   through Cursor while staying the reviewer. DO NOT USE for tasks small enough to do inline, or when
   the user wants the code written directly without delegating.
 license: MIT
-compatibility: Requires the `cursor-agent` CLI installed and authenticated, Node 18+, and git. The orchestrating agent must be able to run shell commands and read files. Shell examples assume bash/zsh (macOS/Linux, or Git Bash/WSL on Windows).
+compatibility: Requires the `cursor-agent` CLI installed and authenticated, Node 18+, and git. The optional `--add-dir` flag requires cursor-agent 2026.07.23 or newer. The orchestrating agent must be able to run shell commands and read files. Shell examples assume bash/zsh (macOS/Linux, or Git Bash/WSL on Windows).
 metadata:
   version: 0.1.0
 ---
@@ -30,9 +30,9 @@ The loop needs only a shell command and file access, so any comparable orchestra
 
 ## Prerequisites (check once)
 
-1. `cursor-agent --version` succeeds. If not, install the Cursor CLI
-   (`curl https://cursor.com/install -fsS | bash` on macOS/Linux, the PowerShell installer from
-   [cursor.com/cli](https://cursor.com/cli) on Windows) and authenticate with `cursor-agent login`.
+1. `cursor-agent --version` succeeds. If not, follow the installer for your platform at
+   [cursor.com/cli](https://cursor.com/cli), inspect what it will run, and authenticate with
+   `cursor-agent login`.
 2. `cursor-agent status` shows you logged in.
 3. You are in (or will point `--cd` at) the target git repository. The relay passes `--trust`, so
    point it only at repositories you trust.
@@ -65,6 +65,7 @@ this `SKILL.md`.)
 ```bash
 node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 # read-only (plan mode — review/diagnosis, no edits):  add --read-only
+# write-capable without automatic command approval:   add --no-force
 # pin a model from `cursor-agent models`:              add --model <name>
 # resume the most recent session:                      add --resume-last  (delta brief only)
 # resume a specific session:                           add --session <id> (delta brief only)
@@ -72,9 +73,10 @@ node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 # see all options:                                     node .../relay.mjs --help
 ```
 
-The child process's cwd pins the workspace. Use repeatable `--add-dir` flags only for extra
-workspace directories. The relay writes artifacts under the system temp dir by default and never
-commits. See [references/dispatch-and-poll.md](references/dispatch-and-poll.md).
+The child process's cwd pins the workspace. On Cursor `2026.07.23` or newer, use repeatable
+`--add-dir` flags only for extra workspace directories. The relay writes artifacts under the system
+temp dir by default and never commits. See
+[references/dispatch-and-poll.md](references/dispatch-and-poll.md).
 
 ### 3. Wait for completion
 
@@ -113,12 +115,12 @@ pass and the diff holds. If rework is needed, send a delta brief with `--resume-
 
 A fresh run defaults to **write-capable with `--force`**: Cursor runs commands without approval
 unless your Cursor config explicitly denies them, so ordinary gates (tests, linters, builds) run
-headlessly. `--read-only` switches to Cursor's **plan mode** (read-only analysis, no edits, no
-`--force`); the relay also snapshots the tree before dispatch and flags `readOnlyViolation: true` in
-`result.json` if a read-only run changed it anyway — verify that flag and `touchedFiles` came back
-clean instead of assuming. The relay always passes `--trust` to keep headless runs from stalling on
-the workspace-trust prompt, which is why `--cd` must only ever point at repositories you trust. The
-permission mode Cursor actually applied is recorded as `permissionMode` in `result.json`.
+headlessly. `--no-force` keeps the run write-capable but withholds automatic command approval;
+commands that require approval are refused because a headless run cannot prompt. `--read-only`
+switches to Cursor's **plan mode** (read-only analysis, no edits, no `--force`). The relay always
+passes `--trust` to keep headless runs from stalling on the workspace-trust prompt, which is why
+`--cd` must only ever point at repositories you trust. The permission mode Cursor actually applied
+is recorded as `permissionMode` in `result.json`; inspect `touchedFiles` and the diff after every run.
 
 ## Read-only second opinions
 

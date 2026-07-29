@@ -84,10 +84,10 @@ for (const skill of SKILLS) {
 // ---- one fake CLI, planted on PATH under every relay's binary name ----
 const FAKE = `const fs = require("node:fs");
 const args = process.argv.slice(2);
-if ((args.includes("--version") && ["qoder-version-hang", "vibe-version-hang"].includes(process.env.SMOKE_MODE))
+if ((args.includes("--version") && ["qoder-version-hang", "vibe-version-hang", "cursor-version-hang"].includes(process.env.SMOKE_MODE))
     || (args[0] === "changelog" && process.env.SMOKE_MODE === "agy-version-hang")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-} else if (args.includes("--version") && ["qoder-version-fail", "vibe-version-fail"].includes(process.env.SMOKE_MODE)) {
+} else if (args.includes("--version") && ["qoder-version-fail", "vibe-version-fail", "cursor-version-fail"].includes(process.env.SMOKE_MODE)) {
   console.error("fake version failure");
   process.exit(7);
 } else if (args.includes("--version") || args[0] === "version" || args[0] === "changelog") {
@@ -128,12 +128,31 @@ if (process.env.SMOKE_MODE === "vibe-success") {
   console.log(JSON.stringify({ role: "assistant", content: "fake vibe completed" }));
   process.exit(0);
 }
-if (["claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
+if (["cursor-success", "claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
   let brief = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => { brief += chunk; });
   process.stdin.on("end", async () => {
     const mode = process.env.SMOKE_MODE;
+    if (mode === "cursor-success") {
+      fs.writeFileSync(process.env.SMOKE_CAPTURE_FILE, JSON.stringify({ args, brief }));
+      console.log(JSON.stringify({
+        type: "system",
+        subtype: "init",
+        session_id: "cursor-session-1",
+        model: "claude-opus-4-8[context=1m,effort=high,fast=false]",
+        permissionMode: args.includes("plan") ? "plan" : "default",
+      }));
+      console.log(JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "cursor-session-1",
+        result: "fake cursor completed",
+        usage: { input_tokens: 11, output_tokens: 4 },
+      }));
+      return;
+    }
     if (mode === "claude-read-only-write") {
       fs.writeFileSync("read-only-violation.txt", "written by fake claude\\n");
     }
@@ -362,6 +381,164 @@ check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 
 // opencode refuses a fresh run without an explicit model
 const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [], vibe: [], cursor: [] };
+
+// ---- Cursor's session/model controls and structured result ----
+{
+  const outDir = join(scratch, "out-success-cursor");
+  const workDir = freshRepo("work success cursor");
+  const addDir = freshRepo("extra success cursor");
+  const captureFile = join(scratch, "capture-success-cursor.json");
+  const run = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    "--session", "cursor-session-0",
+    "--model", "claude-opus-4-8[context=1m,effort=high,fast=false]",
+    "--add-dir", addDir,
+    "--no-force",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "cursor-success", SMOKE_CAPTURE_FILE: captureFile },
+    encoding: "utf8",
+  });
+  const capture = existsSync(captureFile)
+    ? JSON.parse(readFileSync(captureFile, "utf8"))
+    : { args: [], brief: "" };
+  check("cursor success: relay exits zero", run.status === 0);
+  check("cursor success: session, model, add-dir, and no-force argv are exact",
+    JSON.stringify(capture.args) === JSON.stringify([
+      "--print", "--output-format", "stream-json", "--trust",
+      "--model", "claude-opus-4-8[context=1m,effort=high,fast=false]",
+      "--resume", "cursor-session-0",
+      "--add-dir", addDir,
+    ]));
+  check("cursor success: brief travels on stdin", capture.brief === "smoke brief: run until killed.");
+  check("cursor success: result preserves session, model, permission, usage, and final report",
+    existsSync(join(outDir, "result.json")) &&
+    result(outDir).status === "completed" &&
+    result(outDir).force === false &&
+    result(outDir).sessionId === "cursor-session-1" &&
+    result(outDir).resolvedModel === "claude-opus-4-8[context=1m,effort=high,fast=false]" &&
+    result(outDir).permissionMode === "default" &&
+    result(outDir).usage?.input_tokens === 11 &&
+    result(outDir).usage?.output_tokens === 4 &&
+    result(outDir).finalMessage === "fake cursor completed");
+}
+{
+  const outDir = join(scratch, "out-read-only-cursor");
+  const workDir = freshRepo("work-read-only-cursor");
+  const captureFile = join(scratch, "capture-read-only-cursor.json");
+  const run = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    "--read-only",
+    "--resume-last",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "cursor-success", SMOKE_CAPTURE_FILE: captureFile },
+    encoding: "utf8",
+  });
+  const capture = existsSync(captureFile)
+    ? JSON.parse(readFileSync(captureFile, "utf8"))
+    : { args: [] };
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check("cursor read-only: plan mode resumes latest without force",
+    run.status === 0 &&
+    JSON.stringify(capture.args) === JSON.stringify([
+      "--print", "--output-format", "stream-json", "--trust",
+      "--mode", "plan",
+      "--continue",
+    ]) &&
+    value.readOnly === true &&
+    value.force === false &&
+    value.permissionMode === "plan");
+  check("cursor read-only: no unreliable porcelain tripwire is published",
+    !Object.prototype.hasOwnProperty.call(value, "readOnlyViolation"));
+}
+for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "600h"]) {
+  const rejected = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--timeout", bad,
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: join(scratch, "args-invalid-timeout-cursor") },
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  check(`cursor timeout: "${bad}" is rejected`, rejected.status === 2);
+}
+for (const [flag, bad] of [
+  ["--session", ""],
+  ["--session", "--continue"],
+  ["--session", "session & whoami"],
+  ["--model", ""],
+  ["--model", "--help"],
+  ["--model", "model & whoami"],
+]) {
+  const rejected = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    flag, bad,
+  ], { env: baseEnv, encoding: "utf8", timeout: 5000 });
+  check(`cursor validation: unsafe ${flag} value is rejected`, rejected.status === 2);
+}
+for (const [mode, expectedStatus, expectedExit] of [
+  ["cursor-version-hang", "timeout", 124],
+  ["cursor-version-fail", "failed", 7],
+]) {
+  const outDir = join(scratch, `out-${mode}`);
+  const preflight = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--out-dir", outDir,
+    "--timeout", "1s",
+  ], { env: { ...baseEnv, SMOKE_MODE: mode }, encoding: "utf8", timeout: 5000 });
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check(`cursor preflight: ${mode} is explicit and prevents dispatch`,
+    preflight.status === expectedExit &&
+    value.status === expectedStatus &&
+    value.error?.includes("version preflight") &&
+    value.error?.includes("was not dispatched"));
+}
+if (!WIN) {
+  const outDir = join(scratch, "out-abort-preflight-cursor");
+  const preflight = runRelay("cursor", freshRepo("work-abort-preflight-cursor"), outDir, ["--timeout", "1s"], {
+    SMOKE_MODE: "cursor-version-hang",
+  });
+  check("cursor preflight abort: run artifacts are prepared",
+    await until(() => existsSync(join(outDir, "events.jsonl")), 2000));
+  preflight.kill("SIGTERM");
+  const exited = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 5000);
+    preflight.on("close", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check("cursor preflight abort: result is aborted and dispatch never starts",
+    exited &&
+    value.status === "aborted" &&
+    value.signal === "SIGTERM" &&
+    value.error?.includes("version preflight") &&
+    value.error?.includes("was not dispatched"));
+}
+{
+  const outDir = join(scratch, "out-unavailable-cursor");
+  mkdirSync(outDir);
+  writeFileSync(join(outDir, "result.json"), "{\"status\":\"stale\"}\n");
+  writeFileSync(join(outDir, "final.txt"), "stale final\n");
+  const missing = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--out-dir", outDir,
+  ], { env: { ...process.env, PATH: "" }, encoding: "utf8" });
+  check("cursor unavailable: structured result replaces stale artifacts",
+    missing.status === 127 &&
+    result(outDir).status === "cursor_agent_unavailable" &&
+    !existsSync(join(outDir, "final.txt")));
+}
 
 // ---- Vibe's documented streaming argv and safer permission default ----
 for (const scenario of [

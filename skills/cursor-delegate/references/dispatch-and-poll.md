@@ -11,10 +11,9 @@ cursor-agent --version
 cursor-agent status
 ```
 
-Install with `curl https://cursor.com/install -fsS | bash` on macOS/Linux, or the PowerShell
-installer from [cursor.com/cli](https://cursor.com/cli) on Windows, then authenticate with
-`cursor-agent login`. On Windows the CLI installs as a `.cmd` shim; the relay handles that launch
-itself, no setup needed.
+Follow the installer for your platform at [cursor.com/cli](https://cursor.com/cli), inspect what it
+will run, then authenticate with `cursor-agent login`. On Windows the CLI installs as a `.cmd` shim;
+the relay handles that launch itself, no setup needed.
 
 ## Dispatching
 
@@ -30,9 +29,10 @@ node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 | `--cd <dir>` | Working root and child process cwd (default: current directory). |
 | `--model <name>` | Cursor model for this run (default: your Cursor default, usually `auto`). Names come from `cursor-agent models`. |
 | `--read-only` | Run in Cursor's plan mode: read-only analysis, no edits, no `--force`. |
-| `--session <id>` | Resume a specific Cursor chat (`--resume=<id>`); send only the delta brief. |
+| `--no-force` | Keep the run write-capable but withhold `--force`; commands requiring approval are refused. |
+| `--session <id>` | Resume a specific Cursor chat (`--resume <id>`); send only the delta brief. |
 | `--resume-last` | Resume the most recent Cursor chat (`--continue`); send only the delta brief. |
-| `--add-dir <dir>` | Add an extra workspace root. Repeatable. Edits there are not reported in `touchedFiles`. |
+| `--add-dir <dir>` | Add an extra workspace root on Cursor `2026.07.23` or newer. Repeatable. Edits there are not reported in `touchedFiles`. |
 | `--timeout <dur>` | Relay watchdog (default: `30m`; h/m/s strings). cursor-agent has no timeout flag. |
 | `--out-dir <dir>` | Artifact directory (default: a fresh directory under the system temp dir). |
 | `-h`, `--help` | Print the relay's header help. |
@@ -41,9 +41,9 @@ node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 `--add-dir` adds extra workspace roots only.
 
 A fresh run defaults to write-capable with `--force` (commands run without approval unless your
-Cursor config denies them). `--read-only` switches to plan mode instead. The relay always passes
-`--trust` so a headless run never stalls on the workspace-trust prompt — point `--cd` only at
-repositories you trust.
+Cursor config denies them). `--no-force` withholds automatic command approval while retaining file
+edits; `--read-only` switches to plan mode instead. The relay always passes `--trust` so a headless
+run never stalls on the workspace-trust prompt — point `--cd` only at repositories you trust.
 
 ## Artifacts and result fields
 
@@ -62,7 +62,7 @@ inside the worktree can make the artifacts appear there:
   `cursor_agent_unavailable`), `exitCode`, and `signal` (`null` unless the child died on a signal).
 - `workdir`, `model` (the requested name or `null`), `resolvedModel` (the model Cursor actually
   served, from its init event), `permissionMode` (the mode Cursor reported applying), `readOnly`,
-  `resumed`, `cursorAgentVersion`, `sessionId`, `startedAt`, and `finishedAt`.
+  `force`, `resumed`, `cursorAgentVersion`, `sessionId`, `startedAt`, and `finishedAt`.
 - `briefPath`, `finalPath`, `eventsPath`, and `stderrPath`.
 - `finalMessage` — the `result` field of Cursor's closing event; when the run died before emitting
   one, the assistant text chunks joined with `"\n\n"` instead. Tool calls and tool results are
@@ -72,9 +72,8 @@ inside the worktree can make the artifacts appear there:
   edits Cursor makes inside `--add-dir` roots do not show up at all — inspect those trees yourself.
   Dispatch from a clean tree when you want the list to read as "what Cursor changed". `null` means
   git could not report; `[]` means git ran and the tree is clean.
-- `readOnlyViolation` — only on `--read-only` runs: `true` if the porcelain snapshot changed between
-  dispatch and finish, `false` if it did not, `null` if git could not report on either side. Absent
-  on write runs.
+- `usage` — Cursor's token-usage object from the closing result event, or `null` if no result event
+  supplied one.
 - `stderrTail` — the last 20 non-empty stderr lines on any run that did not complete (`failed`,
   `timeout`, `aborted`), except a launch failure, which reports `failed` with no `stderrTail`.
 - `error` — present for launch failures, when the relay watchdog fires (`timeout`), on an `aborted`
@@ -97,6 +96,9 @@ A pre-run usage error exits 2 and writes no result. A missing `cursor-agent` exi
   result event carried `is_error: true` the relay reports `failed` even on a zero exit; Cursor's own
   message is in `finalMessage`. An unknown `--model` name fails fast — re-check against
   `cursor-agent models`.
+- **A version-preflight failure:** the relay writes `failed` with the probe's exit code, or `timeout`
+  with exit 124 when the probe exceeds the smaller of the run watchdog and 10 seconds. Cursor is not
+  dispatched.
 - **`status: "aborted"`:** the relay itself was killed (its parent's timeout, a stopped task, a
   closed terminal) and forwarded the kill to cursor-agent. The result is written before the relay
   exits; inspect the working tree before re-dispatching. On native Windows a hard kill of the relay
@@ -138,13 +140,16 @@ The argv is equivalent to:
 
 ```bash
 cursor-agent --print --output-format stream-json --trust \
-  [--force | --mode plan] [--model <name>] [--resume=<id> | --continue] \
+  [--force | --mode plan] [--model <name>] [--resume <id> | --continue] \
   [--add-dir <dir> ...]   # brief on stdin
 ```
 
+`--no-force` omits both `--force` and `--mode plan`; the run can edit files, but approval-gated
+commands are refused.
+
 The brief rides stdin, so it is not visible in the host process list and has no OS argument-size
 cap. On Windows the launch goes through the shell so the `cursor-agent.cmd` shim resolves; the brief
-still travels on stdin, and the model and directory values are quoted.
+still travels on stdin, and model, session, and directory values are validated and quoted.
 
 ## The commit boundary
 

@@ -24,10 +24,8 @@
  * Autonomy: a fresh run defaults to write-capable with `--force` (Cursor runs
  * commands without approval unless your Cursor config denies them). Pass
  * `--read-only` to run in Cursor's plan mode (read-only/planning, no edits)
- * instead; the relay additionally snapshots `git status --porcelain` before
- * dispatch and flags `readOnlyViolation: true` if the tree changed anyway.
- * The relay always passes `--trust` so a headless run never stalls on the
- * workspace-trust prompt — point --cd only at repositories you trust.
+ * instead. The relay always passes `--trust` so a headless run never stalls
+ * on the workspace-trust prompt — point --cd only at repositories you trust.
  *
  * Usage:
  *   node relay.mjs --brief <file> [options]
@@ -40,11 +38,14 @@
  *                           auto). List names with `cursor-agent models`.
  *   --read-only             Run in Cursor's plan mode: read-only analysis, no
  *                           edits, no --force.
- *   --session <id>          Resume a specific Cursor chat (`--resume=<id>`);
+ *   --no-force              Withhold --force on a write-capable run; commands
+ *                           that require approval are refused instead of run.
+ *   --session <id>          Resume a specific Cursor chat (`--resume <id>`);
  *                           send only the delta brief.
  *   --resume-last           Resume the most recent Cursor chat (`--continue`);
  *                           send only the delta brief.
- *   --add-dir <dir>         Add an extra workspace root. Repeatable.
+ *   --add-dir <dir>         Add an extra workspace root. Repeatable; requires
+ *                           cursor-agent 2026.07.23 or newer.
  *   --timeout <dur>         Relay-side watchdog (default: 30m; h/m/s strings
  *                           like 90s, 45m, 2h). cursor-agent has no timeout flag.
  *   --out-dir <dir>         Where to write run artifacts (default: a fresh dir
@@ -53,9 +54,9 @@
  *
  * Result: written to <out-dir>/result.json and summarized on stdout —
  *   status, exitCode, signal, cursorAgentVersion, sessionId, resolvedModel,
- *   permissionMode, finalMessage (Cursor's own report), touchedFiles (git
- *   porcelain, null if git cannot report), readOnlyViolation (read-only runs),
- *   and paths to brief.txt, final.txt, events.jsonl, and stderr.txt.
+ *   permissionMode, force, usage, finalMessage (Cursor's own report),
+ *   touchedFiles (git porcelain, null if git cannot report), and paths to
+ *   brief.txt, final.txt, events.jsonl, and stderr.txt.
  *
  * Exit codes: a pre-run usage error (bad/missing args, empty brief) exits 2
  * before any run and writes no result file; a missing `cursor-agent` binary
@@ -69,12 +70,16 @@
  */
 
 import { spawn, execSync, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, renameSync, rmSync, readFileSync, existsSync, appendFileSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_TIMEOUT = "30m";
+const MAX_TIMER_MS = 2_147_483_647;
+const VERSION_PROBE_TIMEOUT_MS = 10_000;
+const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:@/[\],=-]*$/;
+const SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -87,6 +92,7 @@ function parseArgs(argv) {
     cd: process.cwd(),
     model: null,
     readOnly: false,
+    force: true,
     session: null,
     resumeLast: false,
     addDirs: [],
@@ -111,6 +117,7 @@ function parseArgs(argv) {
       case "--cd": opts.cd = resolve(next()); break;
       case "--model": opts.model = next(); break;
       case "--read-only": opts.readOnly = true; break;
+      case "--no-force": opts.force = false; break;
       case "--session": opts.session = next(); break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--add-dir": opts.addDirs.push(next()); break;
@@ -123,15 +130,24 @@ function parseArgs(argv) {
   if (opts.resumeLast && opts.session) {
     fail("--resume-last and --session are mutually exclusive; pass only one");
   }
+  if (opts.model !== null && !SAFE_MODEL.test(opts.model)) {
+    fail("--model contains unsupported characters (allowed: letters, digits, . _ : @ / [ ] , = -)");
+  }
+  if (opts.session !== null && !SAFE_SESSION.test(opts.session)) {
+    fail("--session contains unsupported characters (allowed: letters, digits, . _ : -)");
+  }
   // cursor-agent resolves a relative --add-dir against ITS cwd, so resolve
   // against --cd (not the relay's own cwd) — and only after the loop, since
   // --add-dir may appear before --cd on the command line. resolve() passes
   // absolutes through.
   opts.addDirs = opts.addDirs.map((dir) => resolve(opts.cd, dir));
+  if (process.platform === "win32" && opts.addDirs.some((dir) => /[\0\r\n"%!]/.test(dir))) {
+    fail("--add-dir cannot contain %, !, a quote, or a newline when cursor-agent launches through cmd.exe");
+  }
   // The watchdog is relay-only (cursor-agent has no timeout flag), so a
   // malformed --timeout must fail loudly here — a silent 30m fallback would be wrong.
   if (parseDuration(opts.timeout) === null) {
-    fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
+    fail(`--timeout "${opts.timeout}" is invalid or too long; use a positive h/m/s duration no longer than about 24 days`);
   }
   return opts;
 }
@@ -181,19 +197,29 @@ function killChild(child, signal = "SIGTERM") {
   }
 }
 
-function cursorAgentVersion() {
+function cursorAgentVersion(timeoutMs) {
   try {
     // On Windows, cursor-agent installs as a .cmd shim; Node's CreateProcess only
     // auto-appends .exe, never .cmd, so launching it needs a shell there or it
     // ENOENTs on a working install. A pre-joined string (not shell:true + args)
     // avoids Node's DEP0190 warning. POSIX is unaffected. (git installs a real
     // git.exe and must NOT go through a shell — see gitTouchedFiles.)
+    const options = {
+      encoding: "utf8",
+      timeout: Math.min(timeoutMs, VERSION_PROBE_TIMEOUT_MS),
+      killSignal: "SIGKILL",
+    };
     const out = process.platform === "win32"
-      ? execSync("cursor-agent --version", { encoding: "utf8" }).trim()
-      : execFileSync("cursor-agent", ["--version"], { encoding: "utf8" }).trim();
-    return out || "unknown";
-  } catch {
-    return null;
+      ? execSync("cursor-agent --version", options).trim()
+      : execFileSync("cursor-agent", ["--version"], options).trim();
+    return { version: out || "unknown", error: null };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { version: null, error: null };
+    if (process.platform === "win32" &&
+        /not recognized as an internal or external command/i.test(String(error?.stderr || ""))) {
+      return { version: null, error: null };
+    }
+    return { version: null, error };
   }
 }
 
@@ -201,7 +227,17 @@ function parseDuration(duration) {
   // Whole-string match: "1mtypo" must be rejected, not read as one minute.
   const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(duration);
   if (!match || (!match[1] && !match[2] && !match[3])) return null;
-  return (Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)) * 1000;
+  try {
+    const seconds =
+      BigInt(match[1] || 0) * 3600n +
+      BigInt(match[2] || 0) * 60n +
+      BigInt(match[3] || 0);
+    const milliseconds = seconds * 1000n;
+    if (milliseconds <= 0n || milliseconds > BigInt(MAX_TIMER_MS)) return null;
+    return Number(milliseconds);
+  } catch {
+    return null;
+  }
 }
 
 function gitTouchedFiles(cwd) {
@@ -232,9 +268,9 @@ function winq(value) {
 function buildArgv(opts) {
   const argv = ["--print", "--output-format", "stream-json", "--trust"];
   if (opts.readOnly) argv.push("--mode", "plan");
-  else argv.push("--force");
+  else if (opts.force) argv.push("--force");
   if (opts.model) argv.push("--model", winq(opts.model));
-  if (opts.session) argv.push(`--resume=${opts.session}`);
+  if (opts.session) argv.push("--resume", winq(opts.session));
   else if (opts.resumeLast) argv.push("--continue");
   for (const dir of opts.addDirs) argv.push("--add-dir", winq(dir));
   return argv;
@@ -293,6 +329,8 @@ function prepareRunDir(opts, brief) {
     stderrPath: join(outDir, "stderr.txt"),
     resultPath: join(outDir, "result.json"),
   };
+  rmSync(run.finalPath, { force: true });
+  rmSync(run.resultPath, { force: true });
   writeFileSync(run.briefPath, brief, "utf8");
   writeFileSync(run.eventsPath, "", "utf8");
   writeFileSync(run.stderrPath, "", "utf8");
@@ -307,6 +345,7 @@ function makeResultWriter(opts, version, run) {
       workdir: opts.cd,
       model: opts.model,
       readOnly: opts.readOnly,
+      force: opts.force && !opts.readOnly,
       resumed: Boolean(opts.resumeLast || opts.session),
       cursorAgentVersion: version,
       startedAt: run.startedAt,
@@ -317,7 +356,9 @@ function makeResultWriter(opts, version, run) {
       stderrPath: run.stderrPath,
       ...extra,
     };
-    writeFileSync(run.resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    const temporary = `${run.resultPath}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    renameSync(temporary, run.resultPath);
     return result;
   };
 }
@@ -330,6 +371,7 @@ function reportUnavailable(writeResult, resultPath) {
     sessionId: null,
     resolvedModel: null,
     permissionMode: null,
+    usage: null,
     finalMessage: "",
     touchedFiles: null,
   });
@@ -338,18 +380,63 @@ function reportUnavailable(writeResult, resultPath) {
   process.exit(127);
 }
 
-function readOnlyViolation(opts, baseline, touched) {
-  // Plan mode is Cursor-enforced, but measure anyway: compare the post-run
-  // porcelain snapshot to the pre-dispatch one. Only meaningful for --read-only
-  // runs; null when git cannot report on either side.
-  if (!opts.readOnly) return undefined;
-  if (baseline === null || touched === null) return null;
-  const before = new Set(baseline);
-  return touched.some((line) => !before.has(line));
+function reportVersionFailure(opts, writeResult, run, error, timeoutMs) {
+  const timedOut = error?.code === "ETIMEDOUT";
+  const stderr = String(error?.stderr || "").trim();
+  if (stderr) writeFileSync(run.stderrPath, `${stderr}\n`, "utf8");
+  const message = timedOut
+    ? `cursor-agent --version preflight timed out after ${Math.min(timeoutMs, VERSION_PROBE_TIMEOUT_MS)}ms; Cursor was not dispatched`
+    : `cursor-agent --version preflight failed${Number.isInteger(error?.status) ? ` with exit ${error.status}` : ""}; Cursor was not dispatched`;
+  const result = writeResult({
+    status: timedOut ? "timeout" : "failed",
+    exitCode: timedOut ? 124 : Number.isInteger(error?.status) ? error.status : 1,
+    signal: null,
+    sessionId: null,
+    resolvedModel: null,
+    permissionMode: null,
+    usage: null,
+    finalMessage: "",
+    touchedFiles: gitTouchedFiles(opts.cd),
+    ...(stderr ? { stderrTail: stderr.split("\n").slice(-20) } : {}),
+    error: message,
+  });
+  printSummary(result, run.resultPath);
+  process.stderr.write(`relay: ${message}\n`);
+  process.exit(result.exitCode);
+}
+
+function installPreflightSignalHandlers(opts, run, writeResult) {
+  let active = true;
+  const handlers = new Map();
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    const handler = () => {
+      if (!active) return;
+      active = false;
+      const result = writeResult({
+        status: "aborted",
+        exitCode: 128 + (constants.signals[sig] || 15),
+        signal: sig,
+        sessionId: null,
+        resolvedModel: null,
+        permissionMode: null,
+        usage: null,
+        finalMessage: "",
+        touchedFiles: gitTouchedFiles(opts.cd),
+        error: `the relay was killed by ${sig} during the cursor-agent version preflight; Cursor was not dispatched`,
+      });
+      printSummary(result, run.resultPath);
+      process.exit(result.exitCode);
+    };
+    handlers.set(sig, handler);
+    process.on(sig, handler);
+  }
+  return () => {
+    active = false;
+    for (const [sig, handler] of handlers) process.removeListener(sig, handler);
+  };
 }
 
 function dispatchToCursor(opts, brief, run, writeResult) {
-  const baseline = opts.readOnly ? gitTouchedFiles(opts.cd) : null;
   // A shell launch on Windows so the cursor-agent.cmd shim resolves (see
   // cursorAgentVersion) — as a pre-joined string, which sidesteps Node's
   // DEP0190 warning about shell:true with an args array. Safe: the brief is
@@ -364,6 +451,7 @@ function dispatchToCursor(opts, brief, run, writeResult) {
   let sessionId = null;
   let resolvedModel = null;
   let permissionMode = null;
+  let usage = null;
   let resultMessage = null;
   let resultIsError = false;
   const textChunks = [];
@@ -382,6 +470,7 @@ function dispatchToCursor(opts, brief, run, writeResult) {
     if (event.type === "result") {
       if (typeof event.result === "string") resultMessage = event.result;
       if (event.is_error === true) resultIsError = true;
+      if (event.usage && typeof event.usage === "object") usage = event.usage;
     }
   });
 
@@ -453,9 +542,9 @@ function dispatchToCursor(opts, brief, run, writeResult) {
         sessionId,
         resolvedModel,
         permissionMode,
+        usage,
         finalMessage: assembleFinal(),
         touchedFiles: touched,
-        readOnlyViolation: readOnlyViolation(opts, baseline, touched),
         stderrTail: stderrTail.slice(-20),
         error: `the relay was killed by ${sig}; cursor-agent was terminated with it — inspect the working tree before re-dispatching`,
       };
@@ -467,7 +556,7 @@ function dispatchToCursor(opts, brief, run, writeResult) {
         // the child may flush files during the grace window; refresh the snapshot so the
         // artifact matches the tree the orchestrator will actually find
         const late = gitTouchedFiles(opts.cd);
-        writeResult({ ...abortedFields, touchedFiles: late, readOnlyViolation: readOnlyViolation(opts, baseline, late) });
+        writeResult({ ...abortedFields, touchedFiles: late });
         process.exit(result.exitCode);
       }, 2000);
     });
@@ -486,9 +575,9 @@ function dispatchToCursor(opts, brief, run, writeResult) {
       sessionId,
       resolvedModel,
       permissionMode,
+      usage,
       finalMessage: assembleFinal(),
       touchedFiles: touched,
-      readOnlyViolation: readOnlyViolation(opts, baseline, touched),
       stderrTail: stderrTail.slice(-20),
       error: String(err && err.message ? err.message : err),
     });
@@ -518,9 +607,9 @@ function dispatchToCursor(opts, brief, run, writeResult) {
       sessionId,
       resolvedModel,
       permissionMode,
+      usage,
       finalMessage: assembleFinal(),
       touchedFiles: touched,
-      readOnlyViolation: readOnlyViolation(opts, baseline, touched),
       ...(succeeded ? {} : { stderrTail: stderrTail.slice(-20) }),
       ...(watchdogFired ? { error: `cursor-agent did not finish within --timeout ${opts.timeout}; killed by the relay watchdog` } : {}),
       ...(resultIsError && !watchdogFired ? { error: "cursor-agent reported an error result (is_error: true in its result event)" } : {}),
@@ -530,18 +619,31 @@ function dispatchToCursor(opts, brief, run, writeResult) {
   });
 }
 
-function main() {
+async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const brief = readBrief(opts);
   if (!brief.trim()) fail("empty brief (pass --brief <file> or pipe the brief on stdin)");
 
-  const version = cursorAgentVersion();
+  const timeoutMs = parseDuration(opts.timeout);
   const run = prepareRunDir(opts, brief);
-  const writeResult = makeResultWriter(opts, version, run);
-  if (!version) {
+  let writeResult = makeResultWriter(opts, null, run);
+  const clearPreflightSignals = installPreflightSignalHandlers(opts, run, writeResult);
+  const probe = cursorAgentVersion(timeoutMs);
+  // Synchronous child-process calls defer JavaScript signal handlers. Yield once
+  // so a signal received during the bounded probe becomes "aborted" before dispatch.
+  await new Promise((resolve) => setImmediate(resolve));
+  writeResult = makeResultWriter(opts, probe.version, run);
+  if (!probe.version && !probe.error) {
+    clearPreflightSignals();
     reportUnavailable(writeResult, run.resultPath);
     return;
   }
+  if (probe.error) {
+    clearPreflightSignals();
+    reportVersionFailure(opts, writeResult, run, probe.error, timeoutMs);
+    return;
+  }
+  clearPreflightSignals();
   dispatchToCursor(opts, brief, run, writeResult);
 }
 
@@ -552,7 +654,7 @@ function printSummary(result, resultPath) {
   if (result.signal === "SIGKILL" && result.status === "failed") lines.push("hint: the host killed the process (commonly the OOM killer or a supervisor timeout) — this is not a cursor-agent error; check host memory and re-dispatch, or split the task into smaller briefs.");
   if (result.signal === "SIGTERM" && result.status === "failed") lines.push("hint: something outside the relay terminated cursor-agent (a supervisor, the session ending, or a manual kill) — when the relay itself does the killing it reports status \"timeout\" or \"aborted\" instead; inspect the working tree before re-dispatching.");
   if (result.resumed) lines.push("mode: resumed an existing session");
-  if (result.readOnly) lines.push(`mode: read-only (plan)${result.readOnlyViolation ? " — VIOLATION: the tree changed during a read-only run" : ""}`);
+  if (result.readOnly) lines.push("mode: read-only (plan)");
   if (result.resolvedModel) lines.push(`model: ${result.resolvedModel}${result.permissionMode ? `  ·  permission mode: ${result.permissionMode}` : ""}`);
   if (result.sessionId) lines.push(`session id (resume with: --session ${result.sessionId}): ${result.sessionId}`);
   const touched = result.touchedFiles;

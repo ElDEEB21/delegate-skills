@@ -77,7 +77,8 @@ rejects `--resume-last` plus `--session` before launch. Rework gets the same gat
 review, diff review, and implementer sweep.
 
 A resumed run carries the same autonomy flags as a fresh one — write-capable with `--force` by
-default, plan mode under `--read-only`. Confirm `touchedFiles` after every fresh or resumed run.
+default, write-capable without automatic command approval under `--no-force`, or plan mode under
+`--read-only`. Confirm `touchedFiles` after every fresh or resumed run.
 
 ## Surface, do not absorb
 
