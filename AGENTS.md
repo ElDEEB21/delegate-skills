@@ -2,10 +2,11 @@
 
 This repo is a [Skills CLI](https://github.com/vercel-labs/skills) package of **delegation skills** —
 skills that let an orchestrating agent drive a separate CLI coding agent as an implementer, then review
-and land the result. Eight skills ship today: `claude-delegate` (Claude Code), `codex-delegate` (OpenAI
+and land the result. Nine skills ship today: `claude-delegate` (Claude Code), `codex-delegate` (OpenAI
 Codex), `opencode-delegate` (OpenCode), `agy-delegate` (Google Antigravity), `grok-delegate` (Grok
-Build), `kimi-delegate` (Kimi Code), `qoder-delegate` (Qoder CLI), and `cursor-delegate` (Cursor Agent
-CLI); siblings like `gemini-delegate` can be added later without renaming the repo.
+Build), `kimi-delegate` (Kimi Code), `qoder-delegate` (Qoder CLI), `vibe-delegate` (Mistral Vibe),
+and `cursor-delegate` (Cursor Agent CLI); siblings like `gemini-delegate` can be added later without
+renaming the repo.
 
 ## Vocabulary
 
@@ -16,7 +17,7 @@ jargon. Use these terms; don't invent synonyms.
 | --- | --- | --- |
 | **delegate** / **delegation** | the activity, and this skill family | "relay" (as the activity), "hand-off", "offload" |
 | **orchestrator** | the driving agent (Claude Code, …) | "controller", "driver" |
-| **implementer** | the separate agent (Claude, Codex, OpenCode, Antigravity, Grok, Kimi, Qoder) | "worker", "sub-agent", "executor" |
+| **implementer** | the separate agent (Claude, Codex, OpenCode, Antigravity, Grok, Kimi, Qoder, Vibe, Cursor) | "worker", "sub-agent", "executor" |
 | **brief** | the self-contained task spec sent to the implementer | "task file", "the prompt", "the spec" |
 | **gates** | the project's test/lint/build commands | "checks", "CI" |
 | **dispatch** | sending the brief to the implementer | "fire off", "kick off" |
@@ -30,12 +31,14 @@ jargon. Use these terms; don't invent synonyms.
 | `session`, `--continue`, `--resume`, `plan mode`, `--force`, `--trust`, `models` | Cursor Agent's own terms — use verbatim when discussing `cursor-agent` | don't paraphrase them |
 | `session`, `--continue`, `--resume`, `permission mode` (`acceptEdits`/`plan`/`bypassPermissions`), `sandbox`, `subagents`, `agent teams`, `background sessions` | Claude Code's own terms — use verbatim when discussing Claude | never use `subagents` as a generic synonym for implementer |
 | `session`, `-c`, `--resume`, `permission mode` (`default`/`accept_edits`/`auto`/`bypass_permissions`/`dont_ask`/`plan`), `print mode`, `stream-json`, `model`, `context window` | Qoder CLI's own terms — use verbatim when discussing Qoder | don't paraphrase them |
+| `--prompt`, `--output` (`streaming`/`json`/`text`), `--agent` (`plan`/`accept-edits`/`auto-approve`), `--max-turns`, `--max-price`, `--max-tokens`, `--trust`, `--resume`, `--continue`, `--enabled-tools`, `--disabled-tools` | Mistral Vibe's own terms — use verbatim when discussing `vibe` | don't invent a Vibe sandbox enum; `--trust` is not a permission mode |
 
 Banned on sight: coined umbrella terms in user-facing surfaces (README headings, `skills.sh.json`
 titles); any reference to the author's local machine or config; model/version pins (`GPT-5.x` →
 version-neutral); and claims that can't be verified ("verified" without a run → hedge or cut). Every
 CLI flag, field, and command in the docs must match the installed implementer CLI (`claude` /
-`codex` / `opencode` / `agy` / `grok` / `kimi` / `qodercli` / `cursor-agent`) and the skill's `relay.mjs`.
+`codex` / `opencode` / `agy` / `grok` / `kimi` / `qodercli` / `vibe` / `cursor-agent`) and the skill's
+`relay.mjs`.
 
 ## Conventions
 
@@ -53,10 +56,10 @@ CLI flag, field, and command in the docs must match the installed implementer CL
 - **Executables:** keep them minimal and inspectable. Today there is one per skill — a
   `scripts/relay.mjs` under each of `skills/claude-delegate/`, `skills/codex-delegate/`,
   `skills/opencode-delegate/`, `skills/agy-delegate/`, `skills/grok-delegate/`,
-  `skills/kimi-delegate/`, `skills/qoder-delegate/`, and `skills/cursor-delegate/` — each Node
-  built-ins only, no dependencies,
-  no network calls of its own, no credentials, no telemetry. New scripts must hold the same line,
-  and the README's trust section must stay accurate.
+  `skills/kimi-delegate/`, `skills/qoder-delegate/`, `skills/vibe-delegate/`, and
+  `skills/cursor-delegate/` — each Node built-ins only, no dependencies, no network calls of its own,
+  no credentials, no telemetry. New scripts must hold the same line, and the README's trust section
+  must stay accurate.
 
 ## Before publishing a change
 
@@ -67,9 +70,10 @@ CLI flag, field, and command in the docs must match the installed implementer CL
   PowerShell/cmd, not just Git Bash/WSL): the `codex`, `opencode`, and `grok` launches need
   `shell:true` on win32 to resolve the `.cmd` shim (which is why their spaceable args are quoted and
   value flags token-validated); the `claude` and `cursor-agent` launches serialize a pre-joined
-  command string through the shell on win32 for the same shim reason; `agy`, `kimi`, and current
-  `qodercli` installs use native binaries. Each changed
-  launch still needs its own Windows smoke before claiming support.
+  command string through the shell on win32 for the same shim reason; `agy`, `kimi`, current
+  `qodercli`, and `vibe` installs use native binaries. Each changed launch still needs its own Windows
+  smoke before claiming support. Upstream Vibe works on Windows but officially supports and targets
+  UNIX; this repository's native Windows relay launch is unverified.
 - Keep the README's "Verification status" honest — claim only what's been run.
 
 ## Local Claude Code config
