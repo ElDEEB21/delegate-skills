@@ -11,7 +11,7 @@ Eight skills ship today — same loop, different implementer:
 | Skill | Drives | Autonomy | Resume |
 | --- | --- | --- | --- |
 | `claude-delegate` | [Claude Code CLI](https://code.claude.com/docs/en/overview) | explicit tools + `acceptEdits`; strict shell-sandbox settings where supported; shell-free `--read-only`; bypass opt-in | `--resume-last`, `--session <id>` |
-| `codex-delegate` | [OpenAI Codex CLI](https://github.com/openai/codex) | Codex `--sandbox` enum (`workspace-write` default) | `--resume-last` |
+| `codex-delegate` | [OpenAI Codex CLI](https://github.com/openai/codex) | Codex `--sandbox` enum (`workspace-write` default) | `--resume-last`, `--session <id>` |
 | `opencode-delegate` | [OpenCode CLI](https://opencode.ai) | agent: `build` (write) / `plan` (read-only) | `--resume-last`, `--session <id>` |
 | `agy-delegate` | Google Antigravity CLI (`agy`) | Antigravity's own permission policy; bypass is opt-in | `--resume-last`, `--conversation <id>` |
 | `grok-delegate` | Grok Build CLI (`grok`) | explicit: default workspace-scoped, `--read-only` best-effort with violation detection, `--full-access` opt-in | `--resume-last`, `--session <id>` |

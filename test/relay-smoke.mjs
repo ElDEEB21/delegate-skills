@@ -327,6 +327,34 @@ check("codex effort: forwarded as a config override",
   effortRun.status === 0 && effortArgs.includes("-c") && effortArgs[effortArgs.indexOf("-c") + 1] === "model_reasoning_effort=low");
 check("codex effort: recorded in result.json",
   existsSync(join(effortOutDir, "result.json")) && result(effortOutDir).effort === "low");
+// ---- codex --session resumes one exact thread ----
+const sessionOutDir = join(scratch, "out-session-codex");
+const sessionArgsFile = join(scratch, "args-session-codex");
+const sessionWorkDir = freshRepo("work-session-codex");
+const sessionRun = spawnSync(process.execPath,
+  [relayPath("codex"), "--brief", briefPath, "--cd", sessionWorkDir, "--out-dir", sessionOutDir, "--session", "thread-abc"],
+  { env: { ...baseEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: sessionArgsFile }, encoding: "utf8" });
+const sessionArgs = existsSync(sessionArgsFile) ? JSON.parse(readFileSync(sessionArgsFile, "utf8")) : [];
+check("codex session: resumes the named thread",
+  sessionRun.status === 0 && sessionArgs[0] === "exec" && sessionArgs[1] === "resume" && sessionArgs[2] === "thread-abc");
+check("codex session: no -s on a resume (exec resume rejects it)", !sessionArgs.includes("-s"));
+check("codex session: recorded in result.json",
+  existsSync(join(sessionOutDir, "result.json")) && result(sessionOutDir).session === "thread-abc");
+const bothResumeRun = spawnSync(process.execPath,
+  [relayPath("codex"), "--brief", briefPath, "--session", "thread-abc", "--resume-last"],
+  { env: baseEnv, encoding: "utf8" });
+check("codex session: --session with --resume-last is rejected", bothResumeRun.status === 2);
+for (const [name, value] of [
+  ["an empty id", ""],
+  ["an option-like id", "--resume-last"],
+  ["a shell-unsafe id", "thread & whoami"],
+]) {
+  const invalidSessionRun = spawnSync(process.execPath,
+    [relayPath("codex"), "--brief", briefPath, "--session", value],
+    { env: baseEnv, encoding: "utf8" });
+  check(`codex session: ${name} is rejected`, invalidSessionRun.status === 2);
+}
+
 const emptyEffortRun = spawnSync(process.execPath,
   [relayPath("codex"), "--brief", briefPath, "--effort", ""],
   { env: baseEnv, encoding: "utf8" });

@@ -64,7 +64,8 @@ orchestrators use that same directory — if unsure where it landed, run
 ```bash
 node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 # read-only (review/diagnosis, no edits):   add --read-only
-# continue the previous Codex session:      add --resume-last  (send only the delta brief)
+# continue the exact Codex session:         add --session <threadId>  (from result.json; send only the delta brief)
+# fallback when no thread id is available:  add --resume-last
 # hard time limit (watchdog):               add --timeout 2h  (default: off; implementation runs routinely need 1-2h)
 # see all options:                          node .../relay.mjs --help
 ```
@@ -110,8 +111,8 @@ Because Codex's sandbox cannot reliably write `.git` (it varies by version, OS, 
 orchestrator commits.** Only after the gates pass and the diff holds:
 
 - Commit the verified work yourself, with a clear message.
-- If it needs changes, send a delta brief with `--resume-last` (don't restate the whole task) and
-  review again.
+- If it needs changes, send a delta brief with `--session <threadId>` from the prior `result.json`
+  (use `--resume-last` only when no thread id is available), and review again.
 
 ## Read-only second opinions
 
@@ -139,6 +140,6 @@ is in [references/review-and-land.md](references/review-and-land.md).
 - [references/dispatch-and-poll.md](references/dispatch-and-poll.md) — `relay.mjs` flags, the
   `result.json` contract, backgrounding per orchestrator, and recovery when a run misbehaves.
 - [references/review-and-land.md](references/review-and-land.md) — the review checklist, the commit
-  boundary, and the rework cycle via `--resume-last`.
+  boundary, and the exact-session rework cycle.
 - [references/multi-task-queues.md](references/multi-task-queues.md) — running a sequential queue:
   carrying constraints forward, progress tracking, and the end-of-run coherence check.
