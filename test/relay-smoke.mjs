@@ -74,6 +74,35 @@ const alive = (pid) => {
   }
 };
 
+// ---- package shape and registration ----
+// Read from disk rather than from SKILLS, so a skill cannot ship without entering the matrix below:
+// the one thing a hard-coded list cannot catch is its own omission.
+{
+  const skillsDir = join(here, "..", "skills");
+  const onDisk = readdirSync(skillsDir).filter((d) => d.endsWith("-delegate")).sort();
+  const registered = new Set(
+    JSON.parse(readFileSync(join(here, "..", "skills.sh.json"), "utf8"))
+      .groupings.flatMap((g) => g.skills),
+  );
+  const REFERENCES = ["writing-the-brief", "dispatch-and-poll", "review-and-land", "multi-task-queues"];
+
+  check("skills/ is not empty", onDisk.length > 0);
+  for (const dir of onDisk) {
+    const name = dir.replace(/-delegate$/, "");
+    check(`${name}: in the smoke matrix`, SKILLS.includes(name));
+    check(`${name}: SKILL.md`, existsSync(join(skillsDir, dir, "SKILL.md")));
+    check(`${name}: scripts/relay.mjs`, existsSync(join(skillsDir, dir, "scripts", "relay.mjs")));
+    check(
+      `${name}: exactly the four references`,
+      REFERENCES.every((r) => existsSync(join(skillsDir, dir, "references", `${r}.md`))) &&
+        readdirSync(join(skillsDir, dir, "references")).filter((f) => f.endsWith(".md")).length === REFERENCES.length,
+    );
+    check(`${name}: listed in skills.sh.json`, registered.has(dir));
+  }
+  check("smoke matrix has no entry without a directory", SKILLS.every((s) => onDisk.includes(`${s}-delegate`)));
+  check("skills.sh.json has no entry without a directory", [...registered].every((s) => onDisk.includes(s)));
+}
+
 // ---- every relay must at least parse ----
 for (const skill of SKILLS) {
   const r = relayPath(skill);

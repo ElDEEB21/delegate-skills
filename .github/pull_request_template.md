@@ -7,4 +7,5 @@ README's Verification status line, so claim only what you ran — "contract-test
 is a mergeable answer.
 
 **New delegate skill?** The merge checklist is in [CONTRIBUTING.md](https://github.com/amElnagdy/delegate-skills/blob/master/CONTRIBUTING.md).
-`node test/relay-smoke.mjs` covers the shape and the registration; the relay itself is read by hand.
+`node test/relay-smoke.mjs` checks package shape and registration for every skill on disk, then
+drives each relay through timeout and abort; the relay code itself is read by hand.

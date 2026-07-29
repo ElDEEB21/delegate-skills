@@ -31,7 +31,8 @@ Four invariants hold for every skill here, and they are the bar for a new one:
       session id where the CLI exposes one.
 - [ ] Usage errors exit 2 before writing a result file; a missing binary exits 127 **with** one.
 - [ ] Registered in `test/relay-smoke.mjs` — the new relay enters the timeout and abort matrix like
-      every sibling. A relay that opts itself out of the matrix is not registered.
+      every sibling. The suite fails if a skill directory is missing from that matrix, is short a
+      reference, or is absent from `skills.sh.json`, so this one checks itself.
 - [ ] A row in the README table, and a vocabulary row in `AGENTS.md` using that CLI's own terms.
 - [ ] An entry in `skills.sh.json`.
 - [ ] A verification line in the README's **Verification status** list. Claim only what you ran —
