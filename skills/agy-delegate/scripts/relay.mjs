@@ -78,6 +78,7 @@ import { StringDecoder } from "node:string_decoder";
 const DEFAULT_PRINT_TIMEOUT = "30m";
 const MAX_TIMER_MS = 2_147_483_647;
 const MAX_TIMER_DURATION = "596h31m23s";
+const VERSION_PROBE_TIMEOUT_MS = 10_000;
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -206,9 +207,13 @@ function killChild(child, signal = "SIGTERM") {
   }
 }
 
-function agyVersion() {
+function agyVersion(timeoutMs) {
   try {
-    const out = execFileSync("agy", ["changelog"], { encoding: "utf8" }).trim();
+    const out = execFileSync("agy", ["changelog"], {
+      encoding: "utf8",
+      timeout: Math.min(timeoutMs, VERSION_PROBE_TIMEOUT_MS),
+      killSignal: "SIGKILL",
+    }).trim();
     const firstLine = out.split("\n").find(Boolean) || "";
     const match = firstLine.match(/^([^:\s]+):/);
     return match ? match[1] : firstLine || null;
@@ -216,6 +221,7 @@ function agyVersion() {
     // Only a missing binary means "unavailable"; any other changelog failure
     // (permissions, a broken subcommand) must not masquerade as exit 127.
     if (err && err.code === "ENOENT") return null;
+    if (err && err.code === "ETIMEDOUT") throw err;
     return "unknown";
   }
 }
@@ -355,12 +361,26 @@ function reportUnavailable(writeResult, resultPath) {
   process.exit(127);
 }
 
-function dispatchToAgy(opts, brief, run, writeResult) {
+function reportVersionTimeout(writeResult, run, timeoutMs, error) {
+  const stderr = String(error?.stderr || "").trim();
+  if (stderr) writeFileSync(run.stderrPath, `${stderr}\n`, "utf8");
+  const message = `agy changelog version preflight timed out after ${Math.min(timeoutMs, VERSION_PROBE_TIMEOUT_MS)}ms; agy was not dispatched`;
+  const result = writeResult({
+    status: "timeout",
+    exitCode: 124,
+    signal: null,
+    finalMessage: "",
+    touchedFiles: null,
+    ...(stderr ? { stderrTail: stderr.split("\n").slice(-20) } : {}),
+    error: message,
+  });
+  printSummary(result, run.resultPath);
+  process.stderr.write(`relay: ${message}\n`);
+  process.exit(result.exitCode);
+}
+
+function dispatchToAgy(opts, brief, run, writeResult, watchdogMs) {
   const argv = buildArgv(opts, brief, run);
-  const printTimeoutMs = parseDuration(opts.printTimeout);
-  // An explicit --timeout wins over the default print-timeout-plus-grace: agy can hang well
-  // past its own print timeout, which is exactly the case the grace window cannot cover.
-  const watchdogMs = opts.timeout !== null ? parseDuration(opts.timeout) : printTimeoutMs + 60_000;
   // Antigravity's installer provides a native `agy` binary. Launch directly so
   // multi-line briefs and paths with spaces are passed as argv, not shell text.
   const child = spawn("agy", argv, {
@@ -507,8 +527,19 @@ function main() {
     fail(`brief is ${Math.round(briefBytes / 1024)}KB; agy passes the prompt as a CLI argument, which the OS caps (~128KB on Linux). Trim it, or have agy read large context from the workspace instead of inlining it.`);
   }
 
-  const version = agyVersion();
+  const printTimeoutMs = parseDuration(opts.printTimeout);
+  // An explicit --timeout wins over the default print-timeout-plus-grace: agy can hang well
+  // past its own print timeout, which is exactly the case the grace window cannot cover.
+  const watchdogMs = opts.timeout !== null ? parseDuration(opts.timeout) : printTimeoutMs + 60_000;
   const run = prepareRunDir(opts, brief);
+  let version;
+  try {
+    version = agyVersion(watchdogMs);
+  } catch (error) {
+    const writeResult = makeResultWriter(opts, "unknown", run);
+    reportVersionTimeout(writeResult, run, watchdogMs, error);
+    return;
+  }
   const writeResult = makeResultWriter(opts, version, run);
 
   if (!version) {
@@ -516,7 +547,7 @@ function main() {
     return;
   }
 
-  dispatchToAgy(opts, brief, run, writeResult);
+  dispatchToAgy(opts, brief, run, writeResult, watchdogMs);
 }
 
 function printSummary(result, resultPath) {

@@ -84,7 +84,8 @@ for (const skill of SKILLS) {
 // ---- one fake CLI, planted on PATH under every relay's binary name ----
 const FAKE = `const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args.includes("--version") && ["qoder-version-hang", "vibe-version-hang"].includes(process.env.SMOKE_MODE)) {
+if ((args.includes("--version") && ["qoder-version-hang", "vibe-version-hang"].includes(process.env.SMOKE_MODE))
+    || (args[0] === "changelog" && process.env.SMOKE_MODE === "agy-version-hang")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 } else if (args.includes("--version") && ["qoder-version-fail", "vibe-version-fail"].includes(process.env.SMOKE_MODE)) {
   console.error("fake version failure");
@@ -200,7 +201,8 @@ using System.IO;
 using System.Threading;
 class FakeCli {
   static int Main(string[] args) {
-    if (Array.IndexOf(args, "--version") >= 0 && (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-hang" || Environment.GetEnvironmentVariable("SMOKE_MODE") == "vibe-version-hang")) {
+    if ((Array.IndexOf(args, "--version") >= 0 && (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-hang" || Environment.GetEnvironmentVariable("SMOKE_MODE") == "vibe-version-hang"))
+        || (args.Length > 0 && args[0] == "changelog" && Environment.GetEnvironmentVariable("SMOKE_MODE") == "agy-version-hang")) {
       Thread.Sleep(Timeout.Infinite);
       return 1;
     }
@@ -562,6 +564,21 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
     [relayPath("agy"), "--brief", briefPath, "--print-timeout", bad],
     { env: baseEnv, encoding: "utf8" });
   check(`agy print timeout: "${bad}" is rejected`, badRun.status === 2);
+}
+{
+  const outDir = join(scratch, "out-agy-version-hang");
+  const preflight = spawnSync(process.execPath, [
+    relayPath("agy"),
+    "--brief", briefPath,
+    "--out-dir", outDir,
+    "--timeout", "1s",
+  ], { env: { ...baseEnv, SMOKE_MODE: "agy-version-hang" }, encoding: "utf8", timeout: 5000 });
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check("agy preflight: explicit watchdog bounds a hung version probe",
+    preflight.status === 124 &&
+    value.status === "timeout" &&
+    value.error?.includes("version preflight") &&
+    value.error?.includes("was not dispatched"));
 }
 
 // ---- Qoder's documented print-mode argv and structured result ----
