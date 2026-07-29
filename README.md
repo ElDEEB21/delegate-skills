@@ -19,7 +19,7 @@ Ten skills ship today — same loop, different implementer:
 | `qoder-delegate` | [Qoder CLI](https://docs.qoder.com/en/cli/quick-start) (`qodercli`) | `auto` default; bypass is opt-in; effective mode is reported | `--resume-last`, `--resume <id>` |
 | `cursor-delegate` | [Cursor Agent CLI](https://cursor.com/cli) (`cursor-agent`) | `--force` write default; `--no-force` withholds command approval; `--read-only` selects plan mode; `--trust` always | `--resume-last`, `--session <id>` |
 | `vibe-delegate` | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) (`vibe`) | `accept-edits` default; `--full-access` selects `auto-approve`; `--plan-only` selects `plan` | `--resume-last`, `--session <id>` |
-| `pi-delegate` | [Pi CLI](https://github.com/earendil-works/pi-mono) (`pi`) | full local tools by default (no sandbox, no permission modes); `--read-only` enforces a `read,grep,find,ls` tool surface | `--resume-last`, `--session <id>` |
+| `pi-delegate` | [Pi CLI](https://github.com/earendil-works/pi-mono) (`pi`) | full local tools by default (no sandbox, no permission modes); `--read-only` restricts callable tools to `read,grep,find,ls`; project trust is opt-in | `--resume-last`, `--session <id>` |
 
 ## Install
 
@@ -88,7 +88,7 @@ orchestrators, with the commit on the reviewer.
 ### codex-delegate
 
 Drive the OpenAI Codex CLI as a background implementer. Ships four references (writing the brief,
-dispatch/poll, review/land, multi-task queues) loaded only when needed, and one small helper script.
+dispatch/poll, review/land, multi-task queues) loaded only when needed, and one small relay script.
 
 **You'll feel it when:** a bounded task — a migration, a mechanical refactor, a removal sweep — gets
 handed to Codex, comes back as a clean diff with a structured report, and you commit it after re-running
@@ -154,9 +154,11 @@ unless you already know a specific id.
 Same loop for the Pi coding agent CLI (`pi`). The brief rides stdin to `pi --mode json` — no argv
 size cap, nothing in the host process list — and the relay lifts the session id from the JSON
 event stream for later resume. Pi has no sandbox and no permission modes: a default headless run
-writes and executes without prompts, so the guarantees are `--read-only` (an enforced
-`read,grep,find,ls` tool surface, covering extension tools too) and the diff. Project `.pi`
-resources stay untrusted unless the orchestrator explicitly opts in.
+writes and executes without prompts, so its controls are `--read-only` (an enforced
+`read,grep,find,ls` callable-tool allowlist, covering extension/custom tools too) and the diff.
+Installed extension code still has the user's host permissions. The relay passes `--no-approve`
+by default; `--approve` is the explicit opt-in for trusted project `.pi` resources. Requested and
+actual provider/model, usage, and stop reason are recorded in `result.json`.
 
 ### gemini-delegate
 
@@ -229,12 +231,12 @@ This package is intentionally inspectable:
   forwarding, result parsing, and whole-process-tree timeout/abort cleanup; verified end-to-end on
   macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model
   and 32768-token context window, no commit).
-- `pi-delegate` — contributor-reported end-to-end on macOS (stdin brief delivery, a write
-  run, `--read-only` leaving a clean tree, `--session`/`--resume-last` resume, session-id capture
-  from the JSON stream, a bad-model failure, watchdog timeout felling the process tree,
-  `pi_unavailable`/127, and usage errors exiting 2 without artifacts). The shared relay suite is
-  configured to drive its timeout, abort, success, and preflight paths against a stand-in binary
-  on Linux and Windows; a native Windows launch is unverified.
+- `pi-delegate` — verified end-to-end on macOS against `pi` 0.82.1 (stdin brief delivery,
+  explicit provider/model selection, JSON session/provider/model/usage capture, and a
+  `--read-only` run leaving a clean tree). Contributor-reported write, `--session`, and
+  `--resume-last` runs complement the shared relay suite's success, assistant-error, timeout,
+  abort, and bounded-preflight coverage on Linux and Windows; a native Windows launch is
+  unverified.
 - `opencode-delegate` — requires `--model`, since OpenCode has no safe default.
 - `cursor-delegate` — verified end-to-end on Windows against `cursor-agent` 2026.07.23-e383d2b (write run
   under `--force` editing real files; plan-mode `--read-only` run touching nothing;

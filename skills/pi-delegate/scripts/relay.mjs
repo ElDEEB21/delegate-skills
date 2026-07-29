@@ -6,7 +6,7 @@
  * capture the JSON event stream, and write a structured result the orchestrating
  * agent can review. The orchestrator runs this one command and reads the result
  * JSON — every pi-specific mechanic lives in here, which keeps the skill
- * orchestrator-agnostic. Verified against pi 0.82.1 on macOS.
+ * orchestrator-agnostic. Smoke-tested against a current pi CLI on macOS.
  *
  * Trust posture: relay.mjs itself makes no network calls, reads or writes no
  * credentials, and sends no telemetry; it has no dependencies (Node built-ins
@@ -24,10 +24,11 @@
  *
  * Autonomy: pi has no sandbox and no permission modes — a default headless run
  * reads, writes, edits, and runs shell commands without asking. `--read-only`
- * restricts pi to its read-only tool surface (`--tools read,grep,find,ls`), an
- * allowlist pi enforces across built-in, extension, and custom tools. The relay
- * never passes `--approve`, so project `.pi` resources stay untrusted. The diff
- * reported in `touchedFiles` is the record of what changed.
+ * restricts pi's callable tool surface to `read,grep,find,ls` across built-in,
+ * extension, and custom tools; installed extension code still runs with the
+ * user's host permissions. The relay passes `--no-approve` unless `--approve`
+ * explicitly trusts project `.pi` resources. The diff reported in
+ * `touchedFiles` is the record of what changed.
  *
  * pi is installed from npm, so on native Windows `pi` is a `.cmd` shim this
  * relay launches with shell:true. Only token-validated flag values ride argv
@@ -40,11 +41,14 @@
  * Options:
  *   --brief <file>          Path to the brief. If omitted, read it from stdin.
  *   --cd <dir>              Working root for pi (default: current directory).
+ *   --provider <name>       pi provider name (default: pi's own default).
  *   --model <pattern>       pi model id or pattern (default: pi's own default).
  *                           Letters, digits, and . _ : / - only.
  *   --session <id>          Resume a specific pi session; send only the delta brief.
  *   --resume-last           Continue the most recent pi session for this cwd
  *                           (`pi --continue`); send only the delta brief.
+ *   --approve               Trust project-local files for this run. By default
+ *                           the relay passes --no-approve.
  *   --read-only             Restrict pi to read,grep,find,ls (no write/edit/bash).
  *   --timeout <dur>         Relay-side watchdog (default: 30m). pi has no timeout
  *                           flag; durations use h/m/s strings.
@@ -54,13 +58,15 @@
  *
  * Result: written to <out-dir>/result.json and summarized on stdout —
  *   status, exitCode, signal, piVersion, sessionId, finalMessage (pi's own
- *   report), touchedFiles (git porcelain, null if git cannot report), readOnly,
- *   and paths to brief.txt, final.txt, events.jsonl, and stderr.txt.
+ *   report), requested/actual provider and model, usage, touchedFiles (git
+ *   porcelain, null if git cannot report), readOnly, projectTrusted, and paths
+ *   to brief.txt, final.txt, events.jsonl, and stderr.txt.
  *
  * Exit codes: a pre-run usage error (bad/missing args, empty brief) exits 2
  * before any run and writes no result file; a missing `pi` binary exits 127;
- * otherwise the exit code mirrors pi's own (0 success, non-zero failure). If
- * the child dies on a signal, the exit code is 128 plus the signal number and
+ * otherwise the exit code mirrors pi's own (0 success, non-zero failure), except
+ * a final assistant `error`/`aborted` event exits 1 even if pi exits 0. If the
+ * child dies on a signal, the exit code is 128 plus the signal number and
  * `result.json` records the signal. Once the brief validates, `result.json` is
  * written on every outcome — completed, failed, timeout (the --timeout watchdog
  * fired, or the bounded --version preflight hung), aborted (the relay itself
@@ -85,7 +91,7 @@ import { StringDecoder } from "node:string_decoder";
 const DEFAULT_TIMEOUT = "30m";
 const VERSION_TIMEOUT_MS = 10_000;
 const READ_ONLY_TOOLS = "read,grep,find,ls";
-// --model and --session values reach a shell on win32 (shell:true for the
+// --model, --provider, and --session values reach a shell on win32 (shell:true for the
 // .cmd shim), so they are restricted to safe tokens.
 const SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
@@ -105,10 +111,12 @@ function parseArgs(argv) {
   const opts = {
     brief: null,
     cd: process.cwd(),
+    provider: null,
     model: null,
     session: null,
     resumeLast: false,
     readOnly: false,
+    approve: false,
     timeout: DEFAULT_TIMEOUT,
     outDir: null,
   };
@@ -128,10 +136,12 @@ function parseArgs(argv) {
         break;
       case "--brief": opts.brief = next(); break;
       case "--cd": opts.cd = resolve(next()); break;
+      case "--provider": opts.provider = next(); break;
       case "--model": opts.model = next(); break;
       case "--session": opts.session = next(); break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--read-only": opts.readOnly = true; break;
+      case "--approve": opts.approve = true; break;
       case "--timeout": opts.timeout = next(); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
       default:
@@ -141,7 +151,7 @@ function parseArgs(argv) {
   if (opts.resumeLast && opts.session) {
     fail("--resume-last and --session are mutually exclusive; pass only one");
   }
-  for (const flag of ["model", "session"]) {
+  for (const flag of ["model", "provider", "session"]) {
     if (opts[flag] !== null && !SAFE_TOKEN.test(opts[flag])) {
       fail(`--${flag} value contains unsupported characters (allowed: letters, digits, . _ : / -)`);
     }
@@ -202,37 +212,60 @@ function killChild(child, signal = "SIGTERM") {
   }
 }
 
-function piVersion(timeoutMs) {
-  // Bounded preflight: a hung or crashing CLI must not hang the relay or
-  // masquerade as exit 127. Only a missing binary means "unavailable".
-  if (process.platform === "win32") {
-    // The probe below runs through a shell on win32 (the .cmd shim), and
-    // cmd.exe reports a missing binary as exit 1 — not ENOENT — so ask
-    // where.exe first to keep "not installed" classified as pi_unavailable.
-    // where.exe ships in System32 on every supported Windows; a non-ENOENT
-    // failure from it means it ran and found no pi on PATH.
-    try {
-      execFileSync("where.exe", ["pi"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    } catch (whereError) {
-      if (!whereError || whereError.code !== "ENOENT") return { version: null, error: null };
-      // where.exe itself missing is practically impossible; fall through to
-      // the normal probe rather than guess.
-    }
-  }
-  try {
-    return {
-      version: execFileSync("pi", ["--version"], {
-        encoding: "utf8",
-        shell: process.platform === "win32", // resolve the pi.cmd shim
-        timeout: Math.min(timeoutMs, VERSION_TIMEOUT_MS),
-        killSignal: "SIGKILL",
-      }).trim() || "unknown",
-      error: null,
+async function piVersion(timeoutMs, onChild) {
+  const limit = Math.min(timeoutMs, VERSION_TIMEOUT_MS);
+  const runProbe = (command, argv, options = {}) => new Promise((resolveProbe) => {
+    const child = spawn(command, argv, {
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+      ...options,
+    });
+    onChild(child);
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    let timer;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveProbe({ stdout, stderr, ...result });
     };
-  } catch (error) {
-    if (error && error.code === "ENOENT") return { version: null, error: null };
-    return { version: null, error };
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => finish({ code: null, error, timedOut: false }));
+    child.on("close", (code) => finish({ code, error: null, timedOut }));
+    timer = setTimeout(() => {
+      timedOut = true;
+      killChild(child, process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+    }, limit);
+  });
+
+  // shell:true resolves pi.cmd, but a missing command is only an exit 1 from
+  // cmd.exe. Ask the in-box where.exe first so absence stays pi_unavailable.
+  if (process.platform === "win32") {
+    const wherePath = join(process.env.SystemRoot || process.env.WINDIR || "C:\\Windows", "System32", "where.exe");
+    const found = await runProbe(wherePath, ["pi"]);
+    if (found.timedOut) {
+      return { version: null, error: Object.assign(new Error("where.exe pi timed out"), { code: "ETIMEDOUT", stderr: found.stderr }) };
+    }
+    if (found.error && found.error.code !== "ENOENT") return { version: null, error: found.error };
+    if (!found.error && found.code !== 0) return { version: null, error: null };
   }
+
+  const probe = process.platform === "win32"
+    ? await runProbe("pi --version", [], { shell: true, detached: false })
+    : await runProbe("pi", ["--version"]);
+  if (probe.timedOut) {
+    return { version: null, error: Object.assign(new Error("pi --version timed out"), { code: "ETIMEDOUT", stderr: probe.stderr }) };
+  }
+  if (probe.error && probe.error.code === "ENOENT") return { version: null, error: null };
+  if (probe.error) return { version: null, error: probe.error };
+  if (probe.code !== 0) {
+    return { version: null, error: Object.assign(new Error("pi --version failed"), { status: probe.code, stderr: probe.stderr }) };
+  }
+  return { version: probe.stdout.trim() || "unknown", error: null };
 }
 
 function gitTouchedFiles(cwd) {
@@ -253,11 +286,13 @@ function timestamp() {
 
 function buildArgv(opts) {
   // The brief rides stdin, never argv. --mode json alone is non-interactive:
-  // pi reads the piped prompt, streams events, and exits.
+  // pi reads the piped brief, streams events, and exits.
   const argv = ["--mode", "json"];
+  if (opts.provider) argv.push("--provider", opts.provider);
   if (opts.model) argv.push("--model", opts.model);
   if (opts.session) argv.push("--session", opts.session);
   else if (opts.resumeLast) argv.push("--continue");
+  argv.push(opts.approve ? "--approve" : "--no-approve");
   if (opts.readOnly) argv.push("--tools", READ_ONLY_TOOLS);
   return argv;
 }
@@ -335,8 +370,10 @@ function makeResultWriter(opts, version, run) {
       schema: "delegate-relay.result.v1",
       tool: "pi",
       workdir: opts.cd,
+      provider: opts.provider,
       model: opts.model,
       readOnly: opts.readOnly,
+      projectTrusted: opts.approve,
       resumed: Boolean(opts.resumeLast || opts.session),
       piVersion: version,
       startedAt: run.startedAt,
@@ -361,6 +398,10 @@ function reportUnavailable(writeResult, resultPath) {
     exitCode: 127,
     signal: null,
     sessionId: null,
+    actualProvider: null,
+    actualModel: null,
+    usage: null,
+    stopReason: null,
     finalMessage: "",
     touchedFiles: null,
   });
@@ -381,6 +422,10 @@ function reportVersionFailure(writeResult, run, error, timeoutMs) {
     exitCode: timedOut ? 124 : Number.isInteger(error && error.status) ? error.status : 1,
     signal: null,
     sessionId: null,
+    actualProvider: null,
+    actualModel: null,
+    usage: null,
+    stopReason: null,
     finalMessage: "",
     touchedFiles: null,
     ...(stderr ? { stderrTail: stderr.split("\n").slice(-20) } : {}),
@@ -391,18 +436,57 @@ function reportVersionFailure(writeResult, run, error, timeoutMs) {
   process.exit(result.exitCode);
 }
 
+function installPreflightSignalHandlers(opts, run, writeResult, getChild) {
+  let active = true;
+  const handlers = new Map();
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    const handler = () => {
+      if (!active) return;
+      active = false;
+      const result = writeResult({
+        status: "aborted",
+        exitCode: 128 + (constants.signals[sig] || 15),
+        signal: sig,
+        sessionId: null,
+        actualProvider: null,
+        actualModel: null,
+        usage: null,
+        stopReason: null,
+        finalMessage: "",
+        touchedFiles: gitTouchedFiles(opts.cd),
+        error: `the relay was killed by ${sig} during the pi version preflight; pi was not dispatched`,
+      });
+      printSummary(result, run.resultPath);
+      const child = getChild();
+      if (child) killChild(child, process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+      process.exit(result.exitCode);
+    };
+    handlers.set(sig, handler);
+    process.on(sig, handler);
+  }
+  return () => {
+    active = false;
+    for (const [sig, handler] of handlers) process.removeListener(sig, handler);
+  };
+}
+
 function dispatchToPi(opts, brief, run, writeResult) {
   const child = spawn("pi", buildArgv(opts), {
     cwd: opts.cd,
     stdio: ["pipe", "pipe", "pipe"],
     // shell:true on win32 so the pi.cmd shim resolves. Safe: the brief is fed
     // via stdin — never argv — and argv holds only the fixed flag names and
-    // token-validated --model/--session values.
+    // token-validated --provider/--model/--session values.
     shell: process.platform === "win32",
     detached: process.platform !== "win32", // POSIX: lead a new process group so killChild can fell the whole tree
   });
 
   let sessionId = null;
+  let actualProvider = null;
+  let actualModel = null;
+  let usage = null;
+  let stopReason = null;
+  let assistantError = null;
   const textChunks = [];
   const stderrTail = [];
   const scan = makeEventScanner((event) => {
@@ -417,6 +501,11 @@ function dispatchToPi(opts, brief, run, writeResult) {
           if (part && part.type === "text" && typeof part.text === "string") textChunks.push(part.text);
         }
       }
+      if (typeof event.message.provider === "string") actualProvider = event.message.provider;
+      if (typeof event.message.model === "string") actualModel = event.message.model;
+      if (event.message.usage && typeof event.message.usage === "object") usage = event.message.usage;
+      if (typeof event.message.stopReason === "string") stopReason = event.message.stopReason;
+      if (typeof event.message.errorMessage === "string") assistantError = event.message.errorMessage;
     }
   });
 
@@ -488,6 +577,10 @@ function dispatchToPi(opts, brief, run, writeResult) {
         exitCode: 128 + (constants.signals[sig] || 15),
         signal: sig,
         sessionId,
+        actualProvider,
+        actualModel,
+        usage,
+        stopReason,
         finalMessage: assembleFinal(),
         touchedFiles: gitTouchedFiles(opts.cd),
         stderrTail: stderrTail.slice(-20),
@@ -515,6 +608,10 @@ function dispatchToPi(opts, brief, run, writeResult) {
       exitCode: 1,
       signal: null,
       sessionId,
+      actualProvider,
+      actualModel,
+      usage,
+      stopReason,
       finalMessage: assembleFinal(),
       touchedFiles: gitTouchedFiles(opts.cd),
       error: String(err && err.message ? err.message : err),
@@ -532,7 +629,8 @@ function dispatchToPi(opts, brief, run, writeResult) {
     if (watchdogFired) killChild(child, "SIGKILL");
     // A timed-out run is failed even if pi handles SIGTERM by exiting 0 —
     // orchestrators key off status and the relay exit code.
-    const succeeded = code === 0 && !watchdogFired;
+    const assistantFailed = stopReason === "error" || stopReason === "aborted";
+    const succeeded = code === 0 && !watchdogFired && !assistantFailed;
     const mapped = code ?? (constants.signals[signal] ? 128 + constants.signals[signal] : 1);
     const exitCode = succeeded ? 0 : mapped === 0 ? 1 : mapped;
     const result = writeResult({
@@ -540,33 +638,44 @@ function dispatchToPi(opts, brief, run, writeResult) {
       exitCode,
       signal: signal ?? null,
       sessionId,
+      actualProvider,
+      actualModel,
+      usage,
+      stopReason,
       finalMessage: assembleFinal(),
       touchedFiles: gitTouchedFiles(opts.cd),
       ...(succeeded ? {} : { stderrTail: stderrTail.slice(-20) }),
       ...(watchdogFired ? { error: `pi did not finish within --timeout ${opts.timeout}; killed by the relay watchdog` } : {}),
+      ...(!watchdogFired && assistantFailed ? { error: assistantError || `pi ended with stopReason "${stopReason}"` } : {}),
     });
     printSummary(result, run.resultPath);
     process.exit(result.exitCode);
   });
 }
 
-function main() {
+async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const brief = readBrief(opts);
   if (!brief.trim()) fail("empty brief (pass --brief <file> or pipe the brief on stdin)");
 
   const timeoutMs = parseDuration(opts.timeout) ?? parseDuration(DEFAULT_TIMEOUT);
   const run = prepareRunDir(opts, brief);
-  const probe = piVersion(timeoutMs);
-  const writeResult = makeResultWriter(opts, probe.version, run);
+  let writeResult = makeResultWriter(opts, null, run);
+  let preflightChild = null;
+  const clearPreflightSignals = installPreflightSignalHandlers(opts, run, writeResult, () => preflightChild);
+  const probe = await piVersion(timeoutMs, (child) => { preflightChild = child; });
+  writeResult = makeResultWriter(opts, probe.version, run);
   if (!probe.version && !probe.error) {
+    clearPreflightSignals();
     reportUnavailable(writeResult, run.resultPath);
     return;
   }
   if (!probe.version) {
+    clearPreflightSignals();
     reportVersionFailure(writeResult, run, probe.error, timeoutMs);
     return;
   }
+  clearPreflightSignals();
   dispatchToPi(opts, brief, run, writeResult);
 }
 
@@ -577,7 +686,9 @@ function printSummary(result, resultPath) {
   if (result.signal === "SIGKILL" && result.status === "failed") lines.push("hint: the host killed the process (commonly the OOM killer or a supervisor timeout) — this is not a pi error; check host memory and re-dispatch, or split the task into smaller briefs.");
   if (result.signal === "SIGTERM" && result.status === "failed") lines.push("hint: something outside the relay terminated pi (a supervisor, the session ending, or a manual kill) — when the relay itself does the killing it reports status \"timeout\" or \"aborted\" instead; inspect the working tree before re-dispatching.");
   if (result.readOnly) lines.push(`mode: read-only (tools ${READ_ONLY_TOOLS})`);
+  if (result.projectTrusted) lines.push("mode: project resources trusted (--approve)");
   if (result.resumed) lines.push("mode: resumed an existing session");
+  if (result.actualModel) lines.push(`model: ${result.actualProvider ? `${result.actualProvider}/` : ""}${result.actualModel}`);
   if (result.sessionId) lines.push(`session id (resume with: --session ${result.sessionId}): ${result.sessionId}`);
   const touched = result.touchedFiles;
   if (touched === null) {

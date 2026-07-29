@@ -59,7 +59,7 @@ Add extra blocks only when the task needs them:
   first plausible cause) and `<missing_context_gating>` (find missing repo facts or state what is
   unknown).
 - **Research or recommendations** - add `<research_mode>` (separate observed facts, inferences,
-  and open questions), and dispatch with `--read-only` so the run cannot write.
+  and open questions), and dispatch with `--read-only` so Pi cannot invoke write/edit/bash tools.
 
 ## Always ask for the report explicitly
 
@@ -123,7 +123,7 @@ Report: (1) the root cause and fix, (2) files touched, (3) pytest and ruff outco
 
 ## Stdin delivery
 
-The relay pipes the brief to pi on stdin. Unlike CLIs that take the prompt as an argument, there
+The relay pipes the brief to pi on stdin. Unlike CLIs that take the brief as an argument, there
 is no OS argv size cap and the brief never appears in the host process list. Large context can be
 inlined, but prefer pointing pi at workspace files it can read itself. Keep secrets out of the
 brief anyway on shared machines - reference environment variables or files with tight permissions.

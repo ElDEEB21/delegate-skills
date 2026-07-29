@@ -128,15 +128,27 @@ if (process.env.SMOKE_MODE === "vibe-success") {
   console.log(JSON.stringify({ role: "assistant", content: "fake vibe completed" }));
   process.exit(0);
 }
-if (process.env.SMOKE_MODE === "pi-success") {
+if (["pi-success", "pi-error"].includes(process.env.SMOKE_MODE)) {
   let brief = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => { brief += chunk; });
   process.stdin.on("end", () => {
+    const failed = process.env.SMOKE_MODE === "pi-error";
     fs.writeFileSync(process.env.SMOKE_ARGS_FILE, JSON.stringify({ args, brief }));
     console.log(JSON.stringify({ type: "session", version: 3, id: "pi-session-1", timestamp: "2026-01-01T00:00:00.000Z", cwd: process.cwd() }));
     console.log(JSON.stringify({ type: "agent_start" }));
-    console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "fake pi completed" }] } }));
+    console.log(JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: failed ? "fake pi failed" : "fake pi completed" }],
+        provider: "google",
+        model: "fake-model",
+        usage: { input: 7, output: 2, cacheRead: 1, cacheWrite: 0, totalTokens: 10, cost: { total: 0.001 } },
+        stopReason: failed ? "error" : "stop",
+        ...(failed ? { errorMessage: "fake provider failure" } : {}),
+      },
+    }));
     console.log(JSON.stringify({ type: "agent_end", messages: [] }));
     process.exit(0);
   });
@@ -932,6 +944,7 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
     "--brief", briefPath,
     "--cd", workDir,
     "--out-dir", outDir,
+    "--provider", "google",
     "--model", "google/fake-model",
     "--read-only",
   ], {
@@ -943,7 +956,9 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
   check("pi success: documented argv is exact",
     JSON.stringify(capture.args) === JSON.stringify([
       "--mode", "json",
+      "--provider", "google",
       "--model", "google/fake-model",
+      "--no-approve",
       "--tools", "read,grep,find,ls",
     ]));
   check("pi success: brief delivered through stdin", capture.brief === "smoke brief: run until killed.");
@@ -955,9 +970,61 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
       value.sessionId === "pi-session-1" &&
       value.finalMessage === "fake pi completed" &&
       value.readOnly === true &&
+      value.projectTrusted === false &&
+      value.provider === "google" &&
       value.model === "google/fake-model" &&
+      value.actualProvider === "google" &&
+      value.actualModel === "fake-model" &&
+      value.usage?.input === 7 &&
+      value.usage?.output === 2 &&
+      value.stopReason === "stop" &&
       value.resumed === false);
   }
+
+  const approveOutDir = join(scratch, "out-approve-pi");
+  const approveArgsFile = join(scratch, "args-approve-pi");
+  const approveRun = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", approveOutDir,
+    "--approve",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "pi-success", SMOKE_ARGS_FILE: approveArgsFile },
+    encoding: "utf8",
+  });
+  const approveCapture = existsSync(approveArgsFile) ? JSON.parse(readFileSync(approveArgsFile, "utf8")) : {};
+  check("pi project trust: --approve is explicit and recorded",
+    approveRun.status === 0 &&
+    JSON.stringify(approveCapture.args) === JSON.stringify(["--mode", "json", "--approve"]) &&
+    result(approveOutDir).projectTrusted === true);
+
+  const unsafeProvider = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--provider", "google & whoami",
+  ], { env: baseEnv, encoding: "utf8" });
+  check("pi provider: shell-unsafe value is rejected", unsafeProvider.status === 2);
+
+  const errorOutDir = join(scratch, "out-error-pi");
+  const errorArgsFile = join(scratch, "args-error-pi");
+  const errorRun = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", errorOutDir,
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "pi-error", SMOKE_ARGS_FILE: errorArgsFile },
+    encoding: "utf8",
+  });
+  const errorResult = existsSync(join(errorOutDir, "result.json")) ? result(errorOutDir) : {};
+  check("pi assistant error: exit-zero event is reported as failed",
+    errorRun.status === 1 &&
+    errorResult.status === "failed" &&
+    errorResult.exitCode === 1 &&
+    errorResult.stopReason === "error" &&
+    errorResult.error === "fake provider failure");
 
   const resumeOutDir = join(scratch, "out-resume-last-pi");
   const resumeArgsFile = join(scratch, "args-resume-last-pi");
@@ -1015,9 +1082,7 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
 
   for (const [mode, expectedStatus, expectedExit] of [
     ["pi-version-fail", "failed", 7],
-    // The hang case is POSIX-only: on win32 the preflight kill fells cmd.exe
-    // but the fake's node grandchild would linger and pin the scratch dir.
-    ...(WIN ? [] : [["pi-version-hang", "timeout", 124]]),
+    ["pi-version-hang", "timeout", 124],
   ]) {
     const preflightOutDir = join(scratch, `out-${mode}`);
     const preflight = spawnSync(process.execPath, [
@@ -1035,6 +1100,30 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
       preflightResult.status === expectedStatus &&
       preflightResult.error?.includes("version preflight") &&
       preflightResult.error?.includes("was not dispatched"));
+  }
+
+  if (!WIN) {
+    const preflightOutDir = join(scratch, "out-abort-preflight-pi");
+    const preflight = runRelay("pi", workDir, preflightOutDir, ["--timeout", "1s"], {
+      SMOKE_MODE: "pi-version-hang",
+    });
+    check("pi preflight abort: run artifacts are prepared",
+      await until(() => existsSync(join(preflightOutDir, "events.jsonl")), 2000));
+    preflight.kill("SIGTERM");
+    const exited = await new Promise((resolveExit) => {
+      const timer = setTimeout(() => resolveExit(false), 5000);
+      preflight.on("close", () => {
+        clearTimeout(timer);
+        resolveExit(true);
+      });
+    });
+    const value = existsSync(join(preflightOutDir, "result.json")) ? result(preflightOutDir) : {};
+    check("pi preflight abort: result is aborted and dispatch never starts",
+      exited &&
+      value.status === "aborted" &&
+      value.signal === "SIGTERM" &&
+      value.error?.includes("version preflight") &&
+      value.error?.includes("was not dispatched"));
   }
 }
 

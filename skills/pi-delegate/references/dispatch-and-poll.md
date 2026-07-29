@@ -27,10 +27,12 @@ node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 | --- | --- |
 | `--brief <file>` | Brief path. Omit it to read the brief from stdin. |
 | `--cd <dir>` | Working root and child process cwd (default: current directory). |
+| `--provider <name>` | pi provider name (default: pi's own default). Token-validated. |
 | `--model <pattern>` | pi model id or pattern (default: pi's own default). Token-validated: letters, digits, `. _ : / -`. |
 | `--session <id>` | Resume a specific pi session; send only the delta brief. |
 | `--resume-last` | Continue the most recent pi session for this cwd (`pi --continue`); send only the delta brief. |
-| `--read-only` | Restrict pi to `--tools read,grep,find,ls` - no write/edit/bash in the run. |
+| `--read-only` | Restrict pi's callable tools to `--tools read,grep,find,ls`. |
+| `--approve` | Trust project-local `.pi` resources for this run. The default passes `--no-approve`. |
 | `--timeout <dur>` | Relay watchdog (default: `30m`; h/m/s strings). Pi has no timeout flag. |
 | `--out-dir <dir>` | Artifact directory (default: a fresh directory under the system temp dir). |
 | `-h`, `--help` | Print the relay's header help. |
@@ -39,7 +41,8 @@ node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 no add-dir flag and no sandbox, so reachability is simply the filesystem.
 
 Remember: pi has no permission modes. A run without `--read-only` can write and execute anything
-the user account can. Use `--read-only` for review and diagnosis briefs.
+the user account can. `--read-only` removes write/edit/bash from Pi's callable tool surface, but
+installed extension code still runs with the user's host permissions.
 
 ## Artifacts and result fields
 
@@ -56,8 +59,9 @@ Artifacts live outside the repo by default, so they do not appear in `touchedFil
 
 - `schema`, `tool` (`"pi"`), `status` (`completed` | `failed` | `timeout` | `aborted` | `pi_unavailable`), `exitCode`, and
   `signal` (`null` unless the child died on a signal).
-- `workdir`, `model` (the model pattern or `null`), `readOnly`, `resumed`, `piVersion`,
+- `workdir`, requested `provider`/`model`, `projectTrusted`, `readOnly`, `resumed`, `piVersion`,
   `sessionId`, `startedAt`, and `finishedAt`.
+- `actualProvider`, `actualModel`, `usage`, and `stopReason` from Pi's final assistant event.
 - `briefPath`, `finalPath`, `eventsPath`, and `stderrPath`.
 - `sessionId` - parsed from the JSON stream's `session` header. Resume with `--session <id>`.
   Note: `--continue` may mint a new session id for the continued run; the result always reports
@@ -73,12 +77,11 @@ Artifacts live outside the repo by default, so they do not appear in `touchedFil
 - `error` - present for launch failures, preflight failures, when the relay watchdog fires
   (`timeout`), and on an `aborted` run.
 
-Pi's stream carries thinking and message-update events the relay archives but does not parse;
-`result.json` has no `usage` field.
+Pi's stream carries thinking and message-update events the relay archives but does not parse.
 
 ## Waiting for completion
 
-The helper blocks. Use the orchestrator's background-command facility, or background it in a
+The relay blocks. Use the orchestrator's background-command facility, or background it in a
 shell and poll for `result.json`. The run is done only when the process exits and the file
 contains a `status`. The result file is written atomically, so a partial read is impossible.
 
@@ -91,6 +94,7 @@ A pre-run usage error exits 2 and writes no result. A missing `pi` exits 127 and
   authenticate, and re-dispatch.
 - **`status: "failed"`:** read `stderrTail`, `stderrPath`, and the tail of `events.jsonl`. Common
   causes: an unknown `--model` (`Model "<x>" not found`), an expired login, or a provider error.
+  A final assistant event with `stopReason: "error"` or `"aborted"` is failed even if Pi exits zero.
 - **`status: "failed"` with an `error` mentioning `version preflight`:** the bounded `pi --version`
   probe failed or hung, so pi was never dispatched. Check the install (`pi --version` yourself).
 - **`status: "aborted"`:** the relay itself was killed (its parent's timeout, a stopped task, a
@@ -124,16 +128,16 @@ work, preserve the tree rather than replaying the log.
 The launch is equivalent to:
 
 ```bash
-cat brief.txt | pi --mode json [--model <pattern>] [--session <id> | --continue] \
-  [--tools read,grep,find,ls]
+cat brief.txt | pi --mode json [--provider <name>] [--model <pattern>] \
+  [--session <id> | --continue] [--approve | --no-approve] [--tools read,grep,find,ls]
 ```
 
 The brief rides stdin, so it is not visible in the host process list and no argv size cap
 applies. On native Windows `pi` is a `.cmd` shim, so the relay launches it with `shell:true`;
-only the token-validated `--model`/`--session` values ever ride argv. Before dispatch the relay
+only the token-validated `--provider`/`--model`/`--session` values ever ride argv. Before dispatch the relay
 runs a bounded `pi --version` preflight (10s cap) so a hung or crashing CLI fails fast and
-explicitly instead of hanging the run. The relay never passes `--approve`, so project `.pi`
-settings, extensions, and skills stay untrusted.
+explicitly instead of hanging the run. The relay passes `--no-approve` by default, so project
+`.pi` settings, extensions, and skills stay untrusted; `--approve` opts in for a trusted repository.
 
 ## The commit boundary
 

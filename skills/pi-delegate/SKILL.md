@@ -2,7 +2,7 @@
 name: pi-delegate
 description: >-
   Delegate a coding task to the Pi coding agent CLI (`pi`) as a background implementer, then review
-  its diff and land it yourself. Use this whenever the user wants to hand implementation work to Pi -
+  its diff and land it yourself. Use this whenever the user wants to delegate implementation work to Pi -
   phrasings like "have Pi implement X", "delegate this to pi", "run it through Pi", or "use pi to
   implement/fix/refactor" - or wants to run a queue of coding tasks through Pi while staying the
   reviewer. DO NOT USE for tasks small enough to do inline, or when the user wants the code written
@@ -14,9 +14,9 @@ metadata:
 
 # Pi Delegate
 
-You are the **orchestrator**. Hand a bounded coding task to a separate **implementer** - the Pi
+You are the **orchestrator**. Delegate a bounded coding task to a separate **implementer** - the Pi
 coding agent CLI - then review what it produced and land it yourself. You write the brief and own
-the judgment; pi does the typing in its own session; you verify and commit.
+the judgment; the implementer makes changes in its own session; you verify and commit.
 
 The loop needs only a shell command and file access, so any comparable orchestrator can drive it.
 
@@ -38,7 +38,7 @@ The loop needs only a shell command and file access, so any comparable orchestra
 ## Choose the model (optional)
 
 Omit `--model` to use pi's configured default. To pick another, choose from `pi --list-models`
-and pass an explicit id or pattern like `google/gemini-2.5-pro` or `sonnet:high`. The relay
+and pass an explicit id or pattern like `<provider>/<model-id>` or `sonnet:high`. The relay
 accepts letters, digits, and `. _ : / -` only (the value reaches a shell on Windows), so glob
 patterns with `*` are not forwarded.
 
@@ -57,14 +57,16 @@ instructions reach it without inlining. See
 
 ### 2. Dispatch
 
-Use the bundled helper. It pipes the brief to `pi --mode json` on stdin, captures the JSON event
+Use the bundled relay. It pipes the brief to `pi --mode json` on stdin, captures the JSON event
 stream, and writes `result.json`. (`<skill-dir>` is the installed folder containing this
 `SKILL.md`.)
 
 ```bash
 node "<skill-dir>/scripts/relay.mjs" --brief brief.txt --cd /path/to/repo
 # choose a model:                          add --model <id from pi --list-models>
+# choose a provider:                       add --provider <name>
 # read-only run (review/diagnosis):        add --read-only
+# trust project .pi resources:             add --approve
 # resume the most recent session:          add --resume-last  (delta brief only)
 # resume a specific session:               add --session <id> (delta brief only)
 # hard time limit (watchdog):              add --timeout 2h  (the 30m default suits short runs; implementation briefs routinely need 1-2h)
@@ -76,7 +78,7 @@ by default and never commits. See [references/dispatch-and-poll.md](references/d
 
 ### 3. Wait for completion
 
-The helper blocks until pi finishes. Run it with the orchestrator's background-command facility,
+The relay blocks until pi finishes. Run it with the orchestrator's background-command facility,
 or background it in the shell and poll for `result.json`. A pre-run usage error exits 2 and writes
 no result; a missing `pi` exits 127 and writes `status: "pi_unavailable"`.
 
@@ -104,12 +106,12 @@ pass and the diff holds. If rework is needed, send a delta brief with `--resume-
 ## Autonomy and permissions
 
 Pi has **no sandbox and no permission modes**. A default headless run reads, writes, edits, and
-executes shell commands with no prompts - the guarantees are:
+executes shell commands with no prompts - the controls are:
 
-1. `--read-only` restricts pi to `--tools read,grep,find,ls`, an allowlist pi enforces across
-   built-in, extension, and custom tools. A write-capable tool simply does not exist in that run.
-2. The relay never passes `--approve`, so project `.pi` settings, extensions, and skills stay
-   untrusted (pi's non-interactive default).
+1. `--read-only` restricts pi's callable tools to `--tools read,grep,find,ls` across built-in,
+   extension, and custom tools. Installed extension code still runs with the user's host permissions.
+2. The relay passes `--no-approve` by default, so project `.pi` settings, extensions, and skills
+   stay untrusted. `--approve` is the explicit opt-in for a repository the user trusts.
 3. `touchedFiles` and the diff are the record of what changed. Inspect them after every run.
 
 ## Authorization model

@@ -17,7 +17,7 @@ jargon. Use these terms; don't invent synonyms.
 | --- | --- | --- |
 | **delegate** / **delegation** | the activity, and this skill family | "relay" (as the activity), "hand-off", "offload" |
 | **orchestrator** | the driving agent (Claude Code, …) | "controller", "driver" |
-| **implementer** | the separate agent (Claude, Codex, OpenCode, Antigravity, Grok, Kimi, Qoder, Vibe, Cursor) | "worker", "sub-agent", "executor" |
+| **implementer** | the separate agent (Claude, Codex, OpenCode, Antigravity, Grok, Kimi, Qoder, Vibe, Cursor, Pi) | "worker", "sub-agent", "executor" |
 | **brief** | the self-contained task spec sent to the implementer | "task file", "the prompt", "the spec" |
 | **gates** | the project's test/lint/build commands | "checks", "CI" |
 | **dispatch** | sending the brief to the implementer | "fire off", "kick off" |
@@ -38,8 +38,8 @@ Banned on sight: coined umbrella terms in user-facing surfaces (README headings,
 titles); any reference to the author's local machine or config; model/version pins (`GPT-5.x` →
 version-neutral); and claims that can't be verified ("verified" without a run → hedge or cut). Every
 CLI flag, field, and command in the docs must match the installed implementer CLI (`claude` /
-`codex` / `opencode` / `agy` / `grok` / `kimi` / `qodercli` / `vibe` / `cursor-agent`) and the skill's
-`relay.mjs`.
+`codex` / `opencode` / `agy` / `grok` / `kimi` / `qodercli` / `vibe` / `cursor-agent` / `pi`) and
+the skill's `relay.mjs`.
 
 ## Conventions
 

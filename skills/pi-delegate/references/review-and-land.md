@@ -1,6 +1,6 @@
 # Review and land
 
-Pi did the typing; you own the judgment. Verify against reality, never the self-report, and read
+The implementer made the changes; you own the judgment. Verify against reality, never the self-report, and read
 the diff as generated code because a green gate cannot catch every failure mode.
 
 ## Check tests before trusting gates
@@ -78,8 +78,9 @@ handle, since `--continue` may mint a new id for each continued run. The relay r
 diff review, and implementer sweep.
 
 Pi has no permission modes, so a write-capable rework run executes with no prompts - keep rework
-briefs as narrow as the original. A `--read-only` run cannot write at all (the tool surface lacks
-write/edit/bash), so `touchedFiles: []` there is enforced, not measured.
+briefs as narrow as the original. A `--read-only` run removes write/edit/bash from Pi's callable
+tool surface, including extension/custom tools; installed extension code still runs with the
+user's host permissions, so inspect `touchedFiles` and the tree after every run.
 
 ## Surface, do not absorb
 
