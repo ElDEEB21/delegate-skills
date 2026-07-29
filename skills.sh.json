@@ -12,7 +12,8 @@
         "grok-delegate",
         "kimi-delegate",
         "qoder-delegate",
-        "vibe-delegate"
+        "vibe-delegate",
+        "cursor-delegate"
       ]
     }
   ]

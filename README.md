@@ -6,7 +6,7 @@ Skills for **delegating coding work to a separate CLI agent and landing it yours
 orchestrator) writes a self-contained brief, dispatches it to an implementer CLI, then reviews the diff
 and commits — staying the reviewer the whole way.
 
-Eight skills ship today — same loop, different implementer:
+Nine skills ship today — same loop, different implementer:
 
 | Skill | Drives | Autonomy | Resume |
 | --- | --- | --- | --- |
@@ -17,6 +17,7 @@ Eight skills ship today — same loop, different implementer:
 | `grok-delegate` | Grok Build CLI (`grok`) | explicit: default workspace-scoped, `--read-only` best-effort with violation detection, `--full-access` opt-in | `--resume-last`, `--session <id>` |
 | `kimi-delegate` | Kimi Code CLI (`kimi`) | headless runs always use Kimi's auto permission mode | `--resume-last`, `--session <id>` |
 | `qoder-delegate` | [Qoder CLI](https://docs.qoder.com/en/cli/quick-start) (`qodercli`) | `auto` default; bypass is opt-in; effective mode is reported | `--resume-last`, `--resume <id>` |
+| `cursor-delegate` | [Cursor Agent CLI](https://cursor.com/cli) (`cursor-agent`) | `--force` write default; `--no-force` withholds command approval; `--read-only` selects plan mode; `--trust` always | `--resume-last`, `--session <id>` |
 | `vibe-delegate` | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) (`vibe`) | `accept-edits` default; `--full-access` selects `auto-approve`; `--plan-only` selects `plan` | `--resume-last`, `--session <id>` |
 
 ## Install
@@ -127,6 +128,15 @@ models that support explicit sizing. Non-interactive runs use Qoder's `auto` per
 default; bypass remains opt-in. Qoder falls back to `default` outside a trusted directory, so the
 relay records both the requested and effective modes.
 
+### cursor-delegate
+
+Same loop for the Cursor Agent CLI (`cursor-agent`). The brief rides stdin (no process-list
+exposure, no argv-size cap). A fresh run is write-capable with `--force` — Cursor runs commands
+without approval unless the user's Cursor config denies them. `--no-force` withholds automatic
+command approval while retaining file edits, and `--read-only` switches to Cursor's plan mode. The
+relay always passes `--trust`, so `--cd` must only point at repositories the user trusts. The model
+Cursor actually served, permission mode, and usage are recorded in `result.json`.
+
 ### vibe-delegate
 
 Same loop for the Mistral Vibe CLI (`vibe`). Normal runs use `accept-edits`, which permits Vibe's
@@ -168,6 +178,7 @@ bundled `relay.mjs` is the default because it needs nothing but the `codex` bina
   [`kimi`](https://moonshotai.github.io/kimi-code/en/) (`brew install kimi-code`, then `kimi login`) ·
   [`qodercli`](https://docs.qoder.com/en/cli/quick-start) (`qodercli login`, or
   `QODER_PERSONAL_ACCESS_TOKEN` for automation) ·
+  [`cursor-agent`](https://cursor.com/cli) (`cursor-agent login`) ·
   [`vibe`](https://github.com/mistralai/mistral-vibe) ([install `uv`](https://docs.astral.sh/uv/getting-started/installation/),
   then run `uv tool install mistral-vibe` and configure `MISTRAL_API_KEY`).
 - Node 18+ and `git`.
@@ -187,7 +198,7 @@ This package is intentionally inspectable:
 
 **Verification status** — claims here are backed by runs, not assumptions:
 
-- The five previously shipped relays' mechanics are verified: argument handling, exit codes,
+- The previously shipped relays' mechanics are verified: argument handling, exit codes,
   `result.json`, resume, signal reporting, and the implementer-specific guards.
 - `claude-delegate` — verified end-to-end on macOS against `claude` 2.1.220 (write run under
   `acceptEdits`; plan mode refusing an edit, with the porcelain tripwire true on a violation and false
@@ -206,14 +217,23 @@ This package is intentionally inspectable:
   macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model
   and 32768-token context window, no commit).
 - `opencode-delegate` — requires `--model`, since OpenCode has no safe default.
+- `cursor-delegate` — verified end-to-end on Windows against `cursor-agent` 2026.07.23-e383d2b (write run
+  under `--force` editing real files; plan-mode `--read-only` run touching nothing;
+  `--session <id>` resume applying a delta brief in the same session; usage errors exiting 2 without
+  a result file). The shared relay-smoke suite covers model/session/add-directory forwarding,
+  `--no-force`, usage, bounded version preflight, atomic artifacts, and timeout/abort handling, and
+  is configured in CI on Linux and Windows. A maintainer-run native macOS plan-mode smoke against
+  the same version completed with model/session/usage capture and no touched files; a native Linux
+  run is unverified.
 - `vibe-delegate` — contract-tested for launch-mode, resume, tool-filter, and turn/price/token
   forwarding; bounded version preflight; result parsing; and whole-process-tree timeout/abort
   cleanup. A live Vibe run and native Windows launch are unverified.
-- Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); the Qoder
-  and Vibe relays target their currently documented native executables. Native Windows launch smokes
-  for `claude`/`agy`/`grok`/`kimi`/`qoder`/`vibe` are still pending. Claude's own shell sandbox is
+- Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); Cursor
+  serializes a pre-joined, quoted command through the shell; Qoder and Vibe target their currently
+  documented native executables. Native Windows launch smokes for
+  `claude`/`agy`/`grok`/`kimi`/`qoder`/`vibe` are still pending. Claude's own shell sandbox is
   unsupported on native Windows regardless of launch mechanics. Upstream Vibe works on Windows but
-  officially supports and targets UNIX; this repository has not smoke-tested the relay's native
+  officially supports and targets UNIX; this repository has not smoke-tested the Vibe relay's native
   Windows launch.
 - The full delegate → review → commit loop is designed for and run on Claude Code; other orchestrators
   (Cursor, …) are designed-for but unproven.
