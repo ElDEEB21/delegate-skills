@@ -67,7 +67,7 @@
  */
 
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync, appendFileSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
@@ -336,7 +336,11 @@ function makeResultWriter(opts, version, run) {
       finalPath: existsSync(run.finalPath) ? run.finalPath : null,
       ...extra,
     };
-    writeFileSync(run.resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    // Publish atomically so a polling orchestrator never reads a half-written file
+    // (same idiom as claude-delegate's writeJsonAtomic and qoder-delegate).
+    const temporary = `${run.resultPath}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    renameSync(temporary, run.resultPath);
     return result;
   };
 }
