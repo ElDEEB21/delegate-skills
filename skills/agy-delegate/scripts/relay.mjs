@@ -144,8 +144,8 @@ function parseArgs(argv) {
     }
   }
   const printTimeoutMs = parseDuration(opts.printTimeout);
-  if (printTimeoutMs !== null && printTimeoutMs + 60_000 > MAX_TIMER_MS) {
-    fail(`--print-timeout "${opts.printTimeout}" exceeds the relay watchdog limit after its 60s grace; use at most 596h30m23s`);
+  if (printTimeoutMs === null || printTimeoutMs <= 0 || printTimeoutMs + 60_000 > MAX_TIMER_MS) {
+    fail(`--print-timeout "${opts.printTimeout}" must be an h/m/s duration from 1s through 596h30m23s so its 60s grace fits the relay watchdog limit`);
   }
   if (opts.project && (opts.resumeLast || opts.conversation)) {
     fail("--project cannot be combined with --resume-last or --conversation");
@@ -357,7 +357,7 @@ function reportUnavailable(writeResult, resultPath) {
 
 function dispatchToAgy(opts, brief, run, writeResult) {
   const argv = buildArgv(opts, brief, run);
-  const printTimeoutMs = parseDuration(opts.printTimeout) ?? parseDuration(DEFAULT_PRINT_TIMEOUT);
+  const printTimeoutMs = parseDuration(opts.printTimeout);
   // An explicit --timeout wins over the default print-timeout-plus-grace: agy can hang well
   // past its own print timeout, which is exactly the case the grace window cannot cover.
   const watchdogMs = opts.timeout !== null ? parseDuration(opts.timeout) : printTimeoutMs + 60_000;

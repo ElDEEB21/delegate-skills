@@ -557,10 +557,12 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "600h
     { env: baseEnv, encoding: "utf8" });
   check(`agy timeout: "${bad}" is rejected`, badRun.status === 2);
 }
-const oversizedPrintTimeoutRun = spawnSync(process.execPath,
-  [relayPath("agy"), "--brief", briefPath, "--print-timeout", "600h"],
-  { env: baseEnv, encoding: "utf8" });
-check("agy timeout: an unschedulable derived watchdog is rejected", oversizedPrintTimeoutRun.status === 2);
+for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h30m24s", "600h"]) {
+  const badRun = spawnSync(process.execPath,
+    [relayPath("agy"), "--brief", briefPath, "--print-timeout", bad],
+    { env: baseEnv, encoding: "utf8" });
+  check(`agy print timeout: "${bad}" is rejected`, badRun.status === 2);
+}
 
 // ---- Qoder's documented print-mode argv and structured result ----
 {
@@ -914,7 +916,11 @@ async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag)
     check(`${skill} ${tag}: status is "timeout" (got ${r.status})`, r.status === "timeout");
     check(`${skill} ${tag}: relay exit code is non-zero`, r.exitCode !== 0);
     if (skill === "agy") {
-      check("agy timeout: explicit limit is named in the result", r.error?.includes("--timeout 6s"));
+      const timeoutIndex = flags.indexOf("--timeout");
+      const expectedLimit = timeoutIndex === -1
+        ? `--print-timeout ${flags[flags.indexOf("--print-timeout") + 1]} plus 60s grace`
+        : `--timeout ${flags[timeoutIndex + 1]}`;
+      check(`agy ${tag}: selected limit is named in the result`, r.error?.includes(expectedLimit));
     }
   }
   check(`${skill} ${tag}: the implementer process is dead`,
@@ -927,6 +933,12 @@ async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag)
 for (const tc of TIMEOUT_CASES) {
   await driveTimeout(tc, "timeout", {}, "timeout");
 }
+await driveTimeout(
+  { skill: "agy", flags: ["--print-timeout", "1s", "--timeout", "4s"], exitDeadline: 45_000 },
+  "timeout",
+  {},
+  "timeout-precedence",
+);
 
 // A compliant parent must not shield a defiant descendant: the parent exits on the group
 // SIGTERM, its grandchild ignores it, and the sweep at close must still fell the grandchild
