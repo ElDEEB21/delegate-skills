@@ -15,10 +15,8 @@
  *                 native binary directly — a .cmd stand-in cannot represent them,
  *                 so the smoke compiles a real fake .exe with the C# compiler
  *                 that ships in-box with Windows (no install, no network) and
- *                 puts it on PATH under their names. agy's watchdog is
- *                 --print-timeout plus a fixed 60s grace, so its scenario is
- *                 the slow one (about a minute) on every platform. A POSIX
- *                 variant repeats each run with a parent that complies with
+ *                 puts it on PATH under their names. A POSIX variant repeats
+ *                 each run with a parent that complies with
  *                 SIGTERM while its grandchild ignores it — the sweep at close
  *                 must fell the survivor even though the parent's exit
  *                 cancelled the pending escalation timer.
@@ -553,12 +551,16 @@ for (const skill of SKILLS) {
 // ---- agy --timeout is validated before it can silently fire ----
 // parseDuration returns null for a malformed value, and setTimeout(fn, null) fires on the next
 // tick: an unvalidated flag would turn a typo into an instant, silent "timeout".
-for (const bad of ["NONSENSE", "0s", "", "10"]) {
+for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "600h"]) {
   const badRun = spawnSync(process.execPath,
     [relayPath("agy"), "--brief", briefPath, "--timeout", bad],
     { env: baseEnv, encoding: "utf8" });
   check(`agy timeout: "${bad}" is rejected`, badRun.status === 2);
 }
+const oversizedPrintTimeoutRun = spawnSync(process.execPath,
+  [relayPath("agy"), "--brief", briefPath, "--print-timeout", "600h"],
+  { env: baseEnv, encoding: "utf8" });
+check("agy timeout: an unschedulable derived watchdog is rejected", oversizedPrintTimeoutRun.status === 2);
 
 // ---- Qoder's documented print-mode argv and structured result ----
 {
@@ -878,8 +880,8 @@ for (const scenario of [
 }
 
 // ---- 1. the watchdog fells the whole tree ----
-// agy's watchdog flag is --print-timeout, and it always adds a fixed 60s grace on top,
-// so its run needs about a minute wherever it executes.
+// Use agy's explicit watchdog here: this is the path that bounds a server-side hang
+// beyond agy's own --print-timeout, and it keeps the shared smoke fast.
 const TIMEOUT_CASES = [
   { skill: "claude", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "codex", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
@@ -888,7 +890,7 @@ const TIMEOUT_CASES = [
   { skill: "kimi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "qoder", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "vibe", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
-  { skill: "agy", flags: ["--print-timeout", "1s"], exitDeadline: 120_000 },
+  { skill: "agy", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
 ];
 async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag) {
   const outDir = join(scratch, `out-${tag}-${skill}`);
@@ -911,6 +913,9 @@ async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag)
     const r = result(outDir);
     check(`${skill} ${tag}: status is "timeout" (got ${r.status})`, r.status === "timeout");
     check(`${skill} ${tag}: relay exit code is non-zero`, r.exitCode !== 0);
+    if (skill === "agy") {
+      check("agy timeout: explicit limit is named in the result", r.error?.includes("--timeout 6s"));
+    }
   }
   check(`${skill} ${tag}: the implementer process is dead`,
     implementerPid !== null && await until(() => !alive(implementerPid), 20_000));

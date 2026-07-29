@@ -63,9 +63,9 @@
  * If the child dies on a signal, the exit code is 128 plus the signal number and
  * `result.json` records the signal.
  * Once the brief validates, `result.json` is written on every outcome -
- * completed, failed, timeout (the relay watchdog fired after --print-timeout
- * plus 60s grace), aborted (the relay itself was killed and forwarded the kill
- * to agy), or agy_unavailable. An orchestrator that polls for the
+ * completed, failed, timeout (the relay watchdog fired after explicit --timeout,
+ * or after --print-timeout plus 60s grace), aborted (the relay itself was killed
+ * and forwarded the kill to agy), or agy_unavailable. An orchestrator that polls for the
  * file must therefore also treat a non-zero exit with no file as a usage error.
  */
 
@@ -76,6 +76,8 @@ import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_PRINT_TIMEOUT = "30m";
+const MAX_TIMER_MS = 2_147_483_647;
+const MAX_TIMER_DURATION = "596h31m23s";
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -137,9 +139,13 @@ function parseArgs(argv) {
   // failure mode a watchdog has. Zero is rejected for the same reason.
   if (opts.timeout !== null) {
     const milliseconds = parseDuration(opts.timeout);
-    if (milliseconds === null || milliseconds <= 0) {
-      fail(`--timeout "${opts.timeout}" is not a positive duration; use h/m/s strings like 30m, 90s, or 1h30m`);
+    if (milliseconds === null || milliseconds <= 0 || milliseconds > MAX_TIMER_MS) {
+      fail(`--timeout "${opts.timeout}" must be an h/m/s duration from 1s through ${MAX_TIMER_DURATION}`);
     }
+  }
+  const printTimeoutMs = parseDuration(opts.printTimeout);
+  if (printTimeoutMs !== null && printTimeoutMs + 60_000 > MAX_TIMER_MS) {
+    fail(`--print-timeout "${opts.printTimeout}" exceeds the relay watchdog limit after its 60s grace; use at most 596h30m23s`);
   }
   if (opts.project && (opts.resumeLast || opts.conversation)) {
     fail("--project cannot be combined with --resume-last or --conversation");
@@ -215,15 +221,9 @@ function agyVersion() {
 }
 
 function parseDuration(duration) {
-  let milliseconds = 0;
-  let matched = false;
-  for (const match of duration.matchAll(/(\d+)h|(\d+)m|(\d+)s/g)) {
-    matched = true;
-    if (match[1]) milliseconds += Number(match[1]) * 60 * 60 * 1000;
-    if (match[2]) milliseconds += Number(match[2]) * 60 * 1000;
-    if (match[3]) milliseconds += Number(match[3]) * 1000;
-  }
-  return matched ? milliseconds : null;
+  const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(duration);
+  if (!match || (!match[1] && !match[2] && !match[3])) return null;
+  return (Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)) * 1000;
 }
 
 function gitTouchedFiles(cwd) {
