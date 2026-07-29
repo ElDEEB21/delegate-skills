@@ -133,6 +133,22 @@ non-blocking nitpicks rather than silently keeping them) and **stop for scope ch
 completion needs going beyond the brief, ask — don't expand the mandate yourself). The full treatment
 is in [references/review-and-land.md](references/review-and-land.md).
 
+## If you have the openai-codex plugin
+
+The official openai-codex Claude Code plugin is excellent and **complementary** — `codex-delegate`
+builds on the same `codex` CLI, it doesn't replace the plugin. They point in different directions:
+
+- The plugin's `codex:codex-rescue` agent is a **forwarder**: it hands one task to Codex and returns
+  the output. It deliberately does not poll, review, or commit.
+- The plugin's review command and stop-review gate run the **inverse** direction: **Codex reviews your work**.
+- `codex-delegate` is the **orchestration loop in the other direction**: *you* drive Codex to
+  implement across one task or a queue, and *you* review and land each result. That loop — brief →
+  dispatch → poll → review → commit, with the orchestrator owning the commit — is what the plugin
+  leaves to you, and what this skill encodes.
+
+If you have the plugin installed, its companion CLI is an optional alternative dispatch backend; the
+bundled `relay.mjs` is the default because it needs nothing but the `codex` binary.
+
 ## References
 
 - [references/writing-the-brief.md](references/writing-the-brief.md) — how to write a brief Codex can
