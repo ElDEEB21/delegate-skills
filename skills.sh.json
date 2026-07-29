@@ -12,7 +12,8 @@
         "grok-delegate",
         "kimi-delegate",
         "pi-delegate",
-        "qoder-delegate"
+        "qoder-delegate",
+        "vibe-delegate"
       ]
     }
   ]

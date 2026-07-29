@@ -56,6 +56,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -363,7 +364,9 @@ function makeResultWriter(opts, version, run) {
       stderrPath: run.stderrPath,
       ...extra,
     };
-    writeFileSync(run.resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    const temporary = `${run.resultPath}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    renameSync(temporary, run.resultPath);
     return result;
   };
 }

@@ -35,6 +35,10 @@
  *   --read-only             Shortcut for --sandbox read-only (review/diagnosis, no edits).
  *   --resume-last           Continue the most recent Codex session; send only the delta brief.
  *                           (Inherits the original session's sandbox and working root.)
+ *   --session <id>          Continue a specific Codex session by thread id (from a prior
+ *                           result.json). Safer than --resume-last when other Codex runs
+ *                           may have happened since - "last" is global, not per-repo.
+ *                           Mutually exclusive with --resume-last.
  *   --skip-git-repo-check   Allow running outside a git repository.
  *   --timeout <dur>         Relay-side watchdog (default: off). Durations use h/m/s
  *                           strings like 30m or 2h. On expiry the codex child is killed
@@ -62,12 +66,13 @@
  */
 
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync, appendFileSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
+const SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -82,6 +87,7 @@ function parseArgs(argv) {
     effort: null,
     sandbox: "workspace-write",
     resumeLast: false,
+    session: null,
     skipGitRepoCheck: false,
     timeout: null,
     outDir: null,
@@ -107,6 +113,7 @@ function parseArgs(argv) {
       case "--sandbox": opts.sandbox = next(); break;
       case "--read-only": opts.sandbox = "read-only"; break;
       case "--resume-last": opts.resumeLast = true; break;
+      case "--session": opts.session = next(); break;
       case "--skip-git-repo-check": opts.skipGitRepoCheck = true; break;
       case "--timeout": opts.timeout = next(); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
@@ -124,6 +131,14 @@ function parseArgs(argv) {
   // --timeout must fail loudly here - a silent no-watchdog fallback would be wrong.
   if (opts.timeout !== null && parseDuration(opts.timeout) === null) {
     fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
+  }
+  if (opts.session !== null && opts.resumeLast) {
+    fail("--session and --resume-last are mutually exclusive; pass only one");
+  }
+  // This value reaches cmd.exe on win32 (shell:true for the codex.cmd shim), so
+  // accept only the same shell-safe session token shape used by sibling relays.
+  if (opts.session !== null && !SAFE_SESSION.test(opts.session)) {
+    fail("--session must be a shell-safe thread id (letters, digits, . _ : -)");
   }
   return opts;
 }
@@ -212,7 +227,8 @@ function timestamp() {
 
 function buildArgv(opts, finalPath) {
   const argv = ["exec"];
-  if (opts.resumeLast) argv.push("resume", "--last");
+  if (opts.session) argv.push("resume", opts.session);
+  else if (opts.resumeLast) argv.push("resume", "--last");
   // ponytail: shell:true on win32 (needed for the codex.cmd shim) doesn't quote
   // args, so a temp path with spaces (C:\Users\First Last\...) splits and the
   // trailing "-" misparses (issue #3). Quote the only spaceable arg in argv.
@@ -221,7 +237,7 @@ function buildArgv(opts, finalPath) {
   argv.push("--json", "-o", outPath);
   // `-s`/`-C` are not accepted by `exec resume`; resume inherits the original
   // session's sandbox and working root, and we set the child process cwd below.
-  if (!opts.resumeLast) {
+  if (!opts.resumeLast && !opts.session) {
     argv.push("-s", opts.sandbox);
   }
   if (opts.model) argv.push("-m", opts.model);
@@ -280,10 +296,11 @@ function makeResultWriter(opts, version, run) {
     const result = {
       schema: "delegate-relay.result.v1",
       workdir: opts.cd,
-      sandbox: opts.resumeLast ? "(inherited from resumed session)" : opts.sandbox,
+      sandbox: opts.resumeLast || opts.session ? "(inherited from resumed session)" : opts.sandbox,
       model: opts.model,
       effort: opts.effort,
       resumeLast: opts.resumeLast,
+      session: opts.session,
       codexVersion: version,
       startedAt: run.startedAt,
       finishedAt: new Date().toISOString(),
@@ -292,7 +309,11 @@ function makeResultWriter(opts, version, run) {
       finalPath: existsSync(run.finalPath) ? run.finalPath : null,
       ...extra,
     };
-    writeFileSync(run.resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    // Publish atomically so a polling orchestrator never reads a half-written file
+    // (same idiom as claude-delegate's writeJsonAtomic and qoder-delegate).
+    const temporary = `${run.resultPath}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    renameSync(temporary, run.resultPath);
     return result;
   };
 }
@@ -469,7 +490,8 @@ function printSummary(result, resultPath) {
   if (result.signal === "SIGKILL" && result.status === "failed") lines.push("hint: the host killed the process (commonly the OOM killer or a supervisor timeout) — this is not a codex error; check host memory and re-dispatch, or split the task into smaller briefs.");
   if (result.signal === "SIGTERM" && result.status === "failed") lines.push("hint: something outside the relay terminated codex (a supervisor, the session ending, or a manual kill) — when the relay itself does the killing it reports status \"timeout\" or \"aborted\" instead; inspect the working tree before re-dispatching.");
   if (result.resumeLast) lines.push("mode: resumed most recent session");
-  if (result.threadId) lines.push(`thread id (resume with: codex exec resume ${result.threadId}): ${result.threadId}`);
+  if (result.session) lines.push(`mode: resumed session ${result.session}`);
+  if (result.threadId) lines.push(`thread id (resume with: --session ${result.threadId}): ${result.threadId}`);
   const touched = result.touchedFiles;
   if (touched === null) {
     lines.push("touched files: git unavailable — inspect the working tree directly");

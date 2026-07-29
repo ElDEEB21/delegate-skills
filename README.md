@@ -11,13 +11,14 @@ Eight skills ship today — same loop, different implementer:
 | Skill | Drives | Autonomy | Resume |
 | --- | --- | --- | --- |
 | `claude-delegate` | [Claude Code CLI](https://code.claude.com/docs/en/overview) | explicit tools + `acceptEdits`; strict shell-sandbox settings where supported; shell-free `--read-only`; bypass opt-in | `--resume-last`, `--session <id>` |
-| `codex-delegate` | [OpenAI Codex CLI](https://github.com/openai/codex) | Codex `--sandbox` enum (`workspace-write` default) | `--resume-last` |
+| `codex-delegate` | [OpenAI Codex CLI](https://github.com/openai/codex) | Codex `--sandbox` enum (`workspace-write` default) | `--resume-last`, `--session <id>` |
 | `opencode-delegate` | [OpenCode CLI](https://opencode.ai) | agent: `build` (write) / `plan` (read-only) | `--resume-last`, `--session <id>` |
 | `agy-delegate` | Google Antigravity CLI (`agy`) | Antigravity's own permission policy; bypass is opt-in | `--resume-last`, `--conversation <id>` |
 | `grok-delegate` | Grok Build CLI (`grok`) | explicit: default workspace-scoped, `--read-only` best-effort with violation detection, `--full-access` opt-in | `--resume-last`, `--session <id>` |
 | `kimi-delegate` | Kimi Code CLI (`kimi`) | headless runs always use Kimi's auto permission mode | `--resume-last`, `--session <id>` |
 | `pi-delegate` | pi CLI (`pi`) | `--approve` default for headless; `--read-only` restricts tool surface; project trust controlled by `--no-approve` | `--resume-last`, `--session <id>` |
 | `qoder-delegate` | [Qoder CLI](https://docs.qoder.com/en/cli/quick-start) (`qodercli`) | `auto` default; bypass is opt-in; effective mode is reported | `--resume-last`, `--resume <id>` |
+| `vibe-delegate` | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) (`vibe`) | `accept-edits` default; `--full-access` selects `auto-approve`; `--plan-only` selects `plan` | `--resume-last`, `--session <id>` |
 
 ## Install
 
@@ -136,6 +137,16 @@ models that support explicit sizing. Non-interactive runs use Qoder's `auto` per
 default; bypass remains opt-in. Qoder falls back to `default` outside a trusted directory, so the
 relay records both the requested and effective modes.
 
+### vibe-delegate
+
+Same loop for the Mistral Vibe CLI (`vibe`). Normal runs use `accept-edits`, which permits Vibe's
+built-in file edits but rejects tools that still require approval in headless mode. `--full-access`
+is the explicit opt-in to `auto-approve`; `--plan-only` selects Vibe's read-only `plan` agent.
+The relay always passes `--trust` to skip only the directory-trust prompt — it does not grant tool
+permissions or add a sandbox. Turn and token limits can bound a run; `--max-price` is indicative, not
+a hard budget. Vibe's streaming output does not expose the new session id, so use `--resume-last`
+unless you already know a specific id.
+
 ### gemini-delegate
 
 *Planned.* A delegate skill for the Gemini CLI, if and when it gains a comparable non-interactive mode.
@@ -167,7 +178,9 @@ bundled `relay.mjs` is the default because it needs nothing but the `codex` bina
   [`kimi`](https://moonshotai.github.io/kimi-code/en/) (`brew install kimi-code`, then `kimi login`) ·
   `pi` (install according to pi's official documentation, then set `*_API_KEY`) ·
   [`qodercli`](https://docs.qoder.com/en/cli/quick-start) (`qodercli login`, or
-  `QODER_PERSONAL_ACCESS_TOKEN` for automation).
+  `QODER_PERSONAL_ACCESS_TOKEN` for automation) ·
+  [`vibe`](https://github.com/mistralai/mistral-vibe) ([install `uv`](https://docs.astral.sh/uv/getting-started/installation/),
+  then run `uv tool install mistral-vibe` and configure `MISTRAL_API_KEY`).
 - Node 18+ and `git`.
 - An orchestrating agent that can run shell commands and read files.
 - Shell examples assume bash/zsh (macOS/Linux, or Git Bash/WSL on Windows).
@@ -207,10 +220,15 @@ This package is intentionally inspectable:
   macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model
   and 32768-token context window, no commit).
 - `opencode-delegate` — requires `--model`, since OpenCode has no safe default.
+- `vibe-delegate` — contract-tested for launch-mode, resume, tool-filter, and turn/price/token
+  forwarding; bounded version preflight; result parsing; and whole-process-tree timeout/abort
+  cleanup. A live Vibe run and native Windows launch are unverified.
 - Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); the Qoder
-  relay targets its currently documented native `qodercli.exe`. Native Windows launch smokes for
-  `claude`/`agy`/`grok`/`kimi`/`qoder` are still pending. Claude's own shell sandbox is unsupported on
-  native Windows regardless of launch mechanics.
+  and Vibe relays target their currently documented native executables. Native Windows launch smokes
+  for `claude`/`agy`/`grok`/`kimi`/`qoder`/`vibe` are still pending. Claude's own shell sandbox is
+  unsupported on native Windows regardless of launch mechanics. Upstream Vibe works on Windows but
+  officially supports and targets UNIX; this repository has not smoke-tested the relay's native
+  Windows launch.
 - The full delegate → review → commit loop is designed for and run on Claude Code; other orchestrators
   (Cursor, …) are designed-for but unproven.
 
