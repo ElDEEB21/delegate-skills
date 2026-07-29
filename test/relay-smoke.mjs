@@ -7,44 +7,42 @@
  * not complete:
  *
  *   1. timeout  — the watchdog kills the implementer's WHOLE process tree and
- *                 result.json reports status "timeout". Driven for all eight
- *                 relays on both platforms. On Windows, claude launches a .cmd
- *                 shim through a serialized cmd.exe invocation, while
- *                 codex/opencode/grok/pi use shell:true. These are exactly the
- *                 cases a plain child.kill would miss; agy, kimi, and qoder spawn a
+ *                 result.json reports status "timeout". Driven for all ten
+ *                 relays on both platforms. On Windows, claude and cursor
+ *                 launch a .cmd shim through a serialized cmd.exe invocation,
+ *                 while codex/opencode/grok/pi use shell:true. These are exactly the
+ *                 cases a plain child.kill would miss; agy, kimi, qoder, and vibe spawn a
  *                 native binary directly — a .cmd stand-in cannot represent them,
  *                 so the smoke compiles a real fake .exe with the C# compiler
  *                 that ships in-box with Windows (no install, no network) and
- *                 puts it on PATH under their names. agy's watchdog is
- *                 --print-timeout plus a fixed 60s grace, so its scenario is
- *                 the slow one (about a minute) on every platform. A POSIX
- *                 variant repeats each run with a parent that complies with
+ *                 puts it on PATH under their names. A POSIX variant repeats
+ *                 each run with a parent that complies with
  *                 SIGTERM while its grandchild ignores it — the sweep at close
  *                 must fell the survivor even though the parent's exit
  *                 cancelled the pending escalation timer.
  *   2. aborted  — killing the relay itself still produces result.json with
  *                 status "aborted", and files the implementer flushes during
  *                 the shutdown grace window appear in the refreshed
- *                 touchedFiles. Driven for all eight relays on POSIX; Windows
+ *                 touchedFiles. Driven for all ten relays on POSIX; Windows
  *                 delivers no catchable SIGTERM, so the scenario cannot be
  *                 driven there (the skill docs carry the same caveat).
  *
  * Every fake answers each relay's version preflight (--version, `version`,
- * `changelog`). Quick Claude, Qoder, and pi success cases verify brief
+ * `changelog`). Quick Claude, Cursor, Qoder, Vibe, and Pi success cases verify brief
  * delivery, launch arguments, environment handling, and result-event parsing. The
  * timeout/abort cases otherwise run until killed and spawn a subprocess of
  * their own; both assert that this grandchild dies with the implementer.
  * Node built-ins only.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, mkdirSync, copyFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, chmodSync, mkdirSync, copyFileSync } from "node:fs";
 import { join, delimiter, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder", "pi"];
-const binaryName = (skill) => skill === "qoder" ? "qodercli" : skill;
+const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder", "vibe", "cursor", "pi"];
+const binaryName = (skill) => skill === "qoder" ? "qodercli" : skill === "cursor" ? "cursor-agent" : skill;
 const relayPath = (skill) => join(here, "..", "skills", `${skill}-delegate`, "scripts", "relay.mjs");
 const WIN = process.platform === "win32";
 let failed = 0;
@@ -86,10 +84,11 @@ for (const skill of SKILLS) {
 // ---- one fake CLI, planted on PATH under every relay's binary name ----
 const FAKE = `const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args.includes("--version") && /-version-hang$/.test(process.env.SMOKE_MODE || "")) {
+if ((args.includes("--version") && /-version-hang$/.test(process.env.SMOKE_MODE || ""))
+    || (args[0] === "changelog" && process.env.SMOKE_MODE === "agy-version-hang")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 } else if (args.includes("--version") && /-version-fail$/.test(process.env.SMOKE_MODE || "")) {
-  console.error("fake qoder version failure");
+  console.error("fake version failure");
   process.exit(7);
 } else if (args.includes("--version") || args[0] === "version" || args[0] === "changelog") {
   console.log("fake-cli 0.0.0-smoke");
@@ -123,6 +122,12 @@ if (process.env.SMOKE_MODE === "qoder-success") {
   }));
   process.exit(0);
 }
+if (process.env.SMOKE_MODE === "vibe-success") {
+  fs.writeFileSync(process.env.SMOKE_ARGS_FILE, JSON.stringify(args));
+  console.log(JSON.stringify({ role: "assistant", content: "working" }));
+  console.log(JSON.stringify({ role: "assistant", content: "fake vibe completed" }));
+  process.exit(0);
+}
 if (process.env.SMOKE_MODE === "pi-success") {
   let brief = "";
   process.stdin.setEncoding("utf8");
@@ -135,12 +140,31 @@ if (process.env.SMOKE_MODE === "pi-success") {
     console.log(JSON.stringify({ type: "agent_end", messages: [] }));
     process.exit(0);
   });
-} else if (["claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
+} else if (["cursor-success", "claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
   let brief = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => { brief += chunk; });
   process.stdin.on("end", async () => {
     const mode = process.env.SMOKE_MODE;
+    if (mode === "cursor-success") {
+      fs.writeFileSync(process.env.SMOKE_CAPTURE_FILE, JSON.stringify({ args, brief }));
+      console.log(JSON.stringify({
+        type: "system",
+        subtype: "init",
+        session_id: "cursor-session-1",
+        model: "claude-opus-4-8[context=1m,effort=high,fast=false]",
+        permissionMode: args.includes("plan") ? "plan" : "default",
+      }));
+      console.log(JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "cursor-session-1",
+        result: "fake cursor completed",
+        usage: { input_tokens: 11, output_tokens: 4 },
+      }));
+      return;
+    }
     if (mode === "claude-read-only-write") {
       fs.writeFileSync("read-only-violation.txt", "written by fake claude\\n");
     }
@@ -199,7 +223,7 @@ if (process.env.SMOKE_MODE === "pi-success") {
 }
 `;
 
-// agy, kimi, and qoder spawn a native binary without a shell, so on Windows their stand-in must be a
+// agy, kimi, qoder, and vibe spawn a native binary without a shell, so on Windows their stand-in must be a
 // real .exe. The C# compiler ships in-box with the .NET Framework on every supported Windows,
 // which lets the smoke build one locally — no install, no network, still dependency-free.
 const FAKE_EXE_SOURCE = `using System;
@@ -208,22 +232,33 @@ using System.IO;
 using System.Threading;
 class FakeCli {
   static int Main(string[] args) {
-    if (Array.IndexOf(args, "--version") >= 0 && Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-hang") {
+    if ((Array.IndexOf(args, "--version") >= 0 && (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-hang" || Environment.GetEnvironmentVariable("SMOKE_MODE") == "vibe-version-hang"))
+        || (args.Length > 0 && args[0] == "changelog" && Environment.GetEnvironmentVariable("SMOKE_MODE") == "agy-version-hang")) {
       Thread.Sleep(Timeout.Infinite);
       return 1;
     }
-    if (Array.IndexOf(args, "--version") >= 0 && Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-fail") {
-      Console.Error.WriteLine("fake qoder version failure");
+    if (Array.IndexOf(args, "--version") >= 0 && (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-fail" || Environment.GetEnvironmentVariable("SMOKE_MODE") == "vibe-version-fail")) {
+      Console.Error.WriteLine("fake version failure");
       return 7;
     }
     if (Array.IndexOf(args, "--version") >= 0 || (args.Length > 0 && (args[0] == "version" || args[0] == "changelog"))) {
       Console.WriteLine("fake-cli 0.0.0-smoke");
       return 0;
     }
+    if (Environment.GetEnvironmentVariable("SMOKE_MODE") == "capture") {
+      File.WriteAllLines(Environment.GetEnvironmentVariable("SMOKE_ARGS_FILE"), args);
+      return 0;
+    }
     if (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-success") {
       File.WriteAllLines(Environment.GetEnvironmentVariable("SMOKE_ARGS_FILE"), args);
       Console.WriteLine("{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"qoder-session-1\\",\\"model\\":\\"performance\\",\\"permissionMode\\":\\"auto\\"}");
       Console.WriteLine("{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"is_error\\":false,\\"session_id\\":\\"qoder-session-1\\",\\"result\\":\\"fake qoder completed\\",\\"usage\\":{\\"input_tokens\\":7,\\"output_tokens\\":2}}");
+      return 0;
+    }
+    if (Environment.GetEnvironmentVariable("SMOKE_MODE") == "vibe-success") {
+      File.WriteAllLines(Environment.GetEnvironmentVariable("SMOKE_ARGS_FILE"), args);
+      Console.WriteLine("{\\"role\\":\\"assistant\\",\\"content\\":\\"working\\"}");
+      Console.WriteLine("{\\"role\\":\\"assistant\\",\\"content\\":\\"fake vibe completed\\"}");
       return 0;
     }
     var psi = new ProcessStartInfo {
@@ -245,15 +280,15 @@ const shimDir = join(scratch, "shim");
 mkdirSync(shimDir);
 writeFileSync(join(shimDir, "fake-cli.cjs"), FAKE);
 if (WIN) {
-  for (const skill of ["claude", "codex", "opencode", "grok", "pi"]) {
-    writeFileSync(join(shimDir, `${skill}.cmd`), `@node "%~dp0fake-cli.cjs" %*\r\n`);
+  for (const skill of ["claude", "codex", "opencode", "grok", "cursor", "pi"]) {
+    writeFileSync(join(shimDir, `${binaryName(skill)}.cmd`), `@node "%~dp0fake-cli.cjs" %*\r\n`);
   }
   const windir = process.env.WINDIR || "C:\\Windows";
   const csc = [
     join(windir, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
     join(windir, "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe"),
   ].find((p) => existsSync(p));
-  check("windows: the in-box C# compiler exists (builds the native fake for agy/kimi/qoder)", Boolean(csc));
+  check("windows: the in-box C# compiler exists (builds the native fake for agy/kimi/qoder/vibe)", Boolean(csc));
   if (csc) {
     const csFile = join(shimDir, "fake-cli.cs");
     writeFileSync(csFile, FAKE_EXE_SOURCE);
@@ -262,6 +297,7 @@ if (WIN) {
     if (compiled.status === 0) {
       copyFileSync(join(shimDir, "kimi.exe"), join(shimDir, "agy.exe"));
       copyFileSync(join(shimDir, "kimi.exe"), join(shimDir, "qodercli.exe"));
+      copyFileSync(join(shimDir, "kimi.exe"), join(shimDir, "vibe.exe"));
     }
     else console.error(`${compiled.stdout ?? ""}${compiled.stderr ?? ""}`);
   }
@@ -275,6 +311,24 @@ if (WIN) {
 const briefPath = join(scratch, "brief.txt");
 writeFileSync(briefPath, "smoke brief: run until killed.");
 const baseEnv = { ...process.env, PATH: shimDir + delimiter + process.env.PATH, SMOKE_NODE: process.execPath };
+const slowWriteHook = join(scratch, "slow-result-write.cjs");
+writeFileSync(slowWriteHook, `const fs = require("node:fs");
+const { syncBuiltinESMExports } = require("node:module");
+const writeFileSync = fs.writeFileSync;
+fs.writeFileSync = function (path, data, options) {
+  if (!String(path).includes("result.json")) return writeFileSync.apply(this, arguments);
+  const encoding = typeof options === "string" ? options : options?.encoding;
+  const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data, encoding);
+  const split = Math.max(1, Math.floor(bytes.length / 2));
+  writeFileSync(path, bytes.subarray(0, split));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+  writeFileSync(path, bytes.subarray(split), { flag: "a" });
+};
+syncBuiltinESMExports();
+`);
+const slowWriteNodeOptions = [process.env.NODE_OPTIONS, `--require=${JSON.stringify(slowWriteHook.replaceAll("\\", "/"))}`]
+  .filter(Boolean)
+  .join(" ");
 
 const freshRepo = (name) => {
   const dir = join(scratch, name);
@@ -291,6 +345,7 @@ const runRelay = (skill, workDir, outDir, extraArgs, extraEnv) =>
 
 const result = (outDir) => JSON.parse(readFileSync(join(outDir, "result.json"), "utf8"));
 
+
 // ---- codex effort is validated, forwarded, and recorded ----
 const effortOutDir = join(scratch, "out-effort-codex");
 const effortArgsFile = join(scratch, "args-effort-codex");
@@ -303,13 +358,422 @@ check("codex effort: forwarded as a config override",
   effortRun.status === 0 && effortArgs.includes("-c") && effortArgs[effortArgs.indexOf("-c") + 1] === "model_reasoning_effort=low");
 check("codex effort: recorded in result.json",
   existsSync(join(effortOutDir, "result.json")) && result(effortOutDir).effort === "low");
+// ---- codex --session resumes one exact thread ----
+const sessionOutDir = join(scratch, "out-session-codex");
+const sessionArgsFile = join(scratch, "args-session-codex");
+const sessionWorkDir = freshRepo("work-session-codex");
+const sessionRun = spawnSync(process.execPath,
+  [relayPath("codex"), "--brief", briefPath, "--cd", sessionWorkDir, "--out-dir", sessionOutDir, "--session", "thread-abc"],
+  { env: { ...baseEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: sessionArgsFile }, encoding: "utf8" });
+const sessionArgs = existsSync(sessionArgsFile) ? JSON.parse(readFileSync(sessionArgsFile, "utf8")) : [];
+check("codex session: resumes the named thread",
+  sessionRun.status === 0 && sessionArgs[0] === "exec" && sessionArgs[1] === "resume" && sessionArgs[2] === "thread-abc");
+check("codex session: no -s on a resume (exec resume rejects it)", !sessionArgs.includes("-s"));
+check("codex session: recorded in result.json",
+  existsSync(join(sessionOutDir, "result.json")) && result(sessionOutDir).session === "thread-abc");
+const bothResumeRun = spawnSync(process.execPath,
+  [relayPath("codex"), "--brief", briefPath, "--session", "thread-abc", "--resume-last"],
+  { env: baseEnv, encoding: "utf8" });
+check("codex session: --session with --resume-last is rejected", bothResumeRun.status === 2);
+for (const [name, value] of [
+  ["an empty id", ""],
+  ["an option-like id", "--resume-last"],
+  ["a shell-unsafe id", "thread & whoami"],
+]) {
+  const invalidSessionRun = spawnSync(process.execPath,
+    [relayPath("codex"), "--brief", briefPath, "--session", value],
+    { env: baseEnv, encoding: "utf8" });
+  check(`codex session: ${name} is rejected`, invalidSessionRun.status === 2);
+}
+
 const emptyEffortRun = spawnSync(process.execPath,
   [relayPath("codex"), "--brief", briefPath, "--effort", ""],
   { env: baseEnv, encoding: "utf8" });
 check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 
 // opencode refuses a fresh run without an explicit model
-const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [], pi: [] };
+const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [], vibe: [], cursor: [], pi: [] };
+
+// ---- Cursor's session/model controls and structured result ----
+{
+  const outDir = join(scratch, "out-success-cursor");
+  const workDir = freshRepo("work success cursor");
+  const addDir = freshRepo("extra success cursor");
+  const captureFile = join(scratch, "capture-success-cursor.json");
+  const run = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    "--session", "cursor-session-0",
+    "--model", "claude-opus-4-8[context=1m,effort=high,fast=false]",
+    "--add-dir", addDir,
+    "--no-force",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "cursor-success", SMOKE_CAPTURE_FILE: captureFile },
+    encoding: "utf8",
+  });
+  const capture = existsSync(captureFile)
+    ? JSON.parse(readFileSync(captureFile, "utf8"))
+    : { args: [], brief: "" };
+  check("cursor success: relay exits zero", run.status === 0);
+  check("cursor success: session, model, add-dir, and no-force argv are exact",
+    JSON.stringify(capture.args) === JSON.stringify([
+      "--print", "--output-format", "stream-json", "--trust",
+      "--model", "claude-opus-4-8[context=1m,effort=high,fast=false]",
+      "--resume", "cursor-session-0",
+      "--add-dir", addDir,
+    ]));
+  check("cursor success: brief travels on stdin", capture.brief === "smoke brief: run until killed.");
+  check("cursor success: result preserves session, model, permission, usage, and final report",
+    existsSync(join(outDir, "result.json")) &&
+    result(outDir).status === "completed" &&
+    result(outDir).force === false &&
+    result(outDir).sessionId === "cursor-session-1" &&
+    result(outDir).resolvedModel === "claude-opus-4-8[context=1m,effort=high,fast=false]" &&
+    result(outDir).permissionMode === "default" &&
+    result(outDir).usage?.input_tokens === 11 &&
+    result(outDir).usage?.output_tokens === 4 &&
+    result(outDir).finalMessage === "fake cursor completed");
+}
+{
+  const outDir = join(scratch, "out-read-only-cursor");
+  const workDir = freshRepo("work-read-only-cursor");
+  const captureFile = join(scratch, "capture-read-only-cursor.json");
+  const run = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    "--read-only",
+    "--resume-last",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "cursor-success", SMOKE_CAPTURE_FILE: captureFile },
+    encoding: "utf8",
+  });
+  const capture = existsSync(captureFile)
+    ? JSON.parse(readFileSync(captureFile, "utf8"))
+    : { args: [] };
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check("cursor read-only: plan mode resumes latest without force",
+    run.status === 0 &&
+    JSON.stringify(capture.args) === JSON.stringify([
+      "--print", "--output-format", "stream-json", "--trust",
+      "--mode", "plan",
+      "--continue",
+    ]) &&
+    value.readOnly === true &&
+    value.force === false &&
+    value.permissionMode === "plan");
+  check("cursor read-only: no unreliable porcelain tripwire is published",
+    !Object.prototype.hasOwnProperty.call(value, "readOnlyViolation"));
+}
+const cursorNegativeWorkDir = freshRepo("work-negative-cursor");
+for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "600h"]) {
+  const rejected = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--cd", cursorNegativeWorkDir,
+    "--timeout", bad,
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: join(scratch, "args-invalid-timeout-cursor") },
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  check(`cursor timeout: "${bad}" is rejected`, rejected.status === 2);
+}
+for (const [flag, bad] of [
+  ["--session", ""],
+  ["--session", "--continue"],
+  ["--session", "session & whoami"],
+  ["--model", ""],
+  ["--model", "--help"],
+  ["--model", "model & whoami"],
+]) {
+  const rejected = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--cd", cursorNegativeWorkDir,
+    flag, bad,
+  ], { env: baseEnv, encoding: "utf8", timeout: 5000 });
+  check(`cursor validation: unsafe ${flag} value is rejected`, rejected.status === 2);
+}
+for (const [mode, expectedStatus, expectedExit] of [
+  ["cursor-version-hang", "timeout", 124],
+  ["cursor-version-fail", "failed", 7],
+]) {
+  const outDir = join(scratch, `out-${mode}`);
+  const preflight = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--cd", cursorNegativeWorkDir,
+    "--out-dir", outDir,
+    "--timeout", "1s",
+  ], { env: { ...baseEnv, SMOKE_MODE: mode }, encoding: "utf8", timeout: 5000 });
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check(`cursor preflight: ${mode} is explicit and prevents dispatch`,
+    preflight.status === expectedExit &&
+    value.status === expectedStatus &&
+    value.error?.includes("version preflight") &&
+    value.error?.includes("was not dispatched"));
+}
+if (!WIN) {
+  const outDir = join(scratch, "out-abort-preflight-cursor");
+  const preflight = runRelay("cursor", freshRepo("work-abort-preflight-cursor"), outDir, ["--timeout", "1s"], {
+    SMOKE_MODE: "cursor-version-hang",
+  });
+  check("cursor preflight abort: run artifacts are prepared",
+    await until(() => existsSync(join(outDir, "events.jsonl")), 2000));
+  preflight.kill("SIGTERM");
+  const exited = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 5000);
+    preflight.on("close", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check("cursor preflight abort: result is aborted and dispatch never starts",
+    exited &&
+    value.status === "aborted" &&
+    value.signal === "SIGTERM" &&
+    value.error?.includes("version preflight") &&
+    value.error?.includes("was not dispatched"));
+}
+{
+  const outDir = join(scratch, "out-unavailable-cursor");
+  mkdirSync(outDir);
+  writeFileSync(join(outDir, "result.json"), "{\"status\":\"stale\"}\n");
+  writeFileSync(join(outDir, "final.txt"), "stale final\n");
+  const missing = spawnSync(process.execPath, [
+    relayPath("cursor"),
+    "--brief", briefPath,
+    "--cd", cursorNegativeWorkDir,
+    "--out-dir", outDir,
+  ], { env: { ...process.env, PATH: "" }, encoding: "utf8" });
+  check("cursor unavailable: structured result replaces stale artifacts",
+    missing.status === 127 &&
+    result(outDir).status === "cursor_agent_unavailable" &&
+    !existsSync(join(outDir, "final.txt")));
+}
+
+// ---- Vibe's documented streaming argv and safer permission default ----
+for (const scenario of [
+  { name: "default", relayArgs: [], agent: "accept-edits", forwarded: [], resumed: false },
+  { name: "plan only", relayArgs: ["--plan-only"], agent: "plan", forwarded: [], resumed: false },
+  {
+    name: "full access",
+    relayArgs: ["--full-access", "--max-turns", "3", "--max-price", "0.5", "--max-tokens", "1000"],
+    agent: "auto-approve",
+    forwarded: ["--max-turns", "3", "--max-price", "0.5", "--max-tokens", "1000"],
+    resumed: false,
+  },
+  {
+    name: "session and tools",
+    relayArgs: ["--session", "vibe-session-1", "--enabled-tools", "read_file", "--disabled-tools", "bash"],
+    agent: "accept-edits",
+    forwarded: ["--resume", "vibe-session-1", "--enabled-tools", "read_file", "--disabled-tools", "bash"],
+    resumed: true,
+  },
+  {
+    name: "resume last",
+    relayArgs: ["--resume-last"],
+    agent: "accept-edits",
+    forwarded: ["--continue"],
+    resumed: true,
+  },
+]) {
+  const outDir = join(scratch, `out-${scenario.name}-vibe`);
+  const workDir = freshRepo(`work-${scenario.name}-vibe`);
+  const argsFile = join(scratch, `args-${scenario.name}-vibe`);
+  const run = spawnSync(process.execPath, [
+    relayPath("vibe"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    ...scenario.relayArgs,
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "vibe-success", SMOKE_ARGS_FILE: argsFile },
+    encoding: "utf8",
+  });
+  const args = existsSync(argsFile)
+    ? WIN
+      ? readFileSync(argsFile, "utf8").split(/\r?\n/).filter(Boolean)
+      : JSON.parse(readFileSync(argsFile, "utf8"))
+    : [];
+  check(`vibe ${scenario.name}: relay exits zero`, run.status === 0);
+  check(`vibe ${scenario.name}: documented argv is exact`,
+    JSON.stringify(args) === JSON.stringify([
+      "--output", "streaming",
+      "--agent", scenario.agent,
+      "--trust",
+      ...scenario.forwarded,
+      "--prompt=smoke brief: run until killed.",
+    ]));
+  check(`vibe ${scenario.name}: result and assistant output are captured`,
+    existsSync(join(outDir, "result.json")) &&
+    result(outDir).status === "completed" &&
+    result(outDir).finalMessage === "fake vibe completed" &&
+    result(outDir).resumed === scenario.resumed &&
+    result(outDir).sessionId === null);
+}
+for (const [mode, expectedStatus, expectedExit] of [
+  ["vibe-version-hang", "timeout", 124],
+  ["vibe-version-fail", "failed", 7],
+]) {
+  const workDir = freshRepo(`work-${mode}`);
+  const outDir = join(scratch, `out-${mode}`);
+  const preflight = spawnSync(process.execPath, [
+    relayPath("vibe"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    "--timeout", "1s",
+  ], { env: { ...baseEnv, SMOKE_MODE: mode }, encoding: "utf8", timeout: 5000 });
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check(`vibe preflight: ${mode} is explicit and prevents dispatch`,
+    preflight.status === expectedExit &&
+    value.status === expectedStatus &&
+    value.error?.includes("version preflight") &&
+    value.error?.includes("was not dispatched"));
+}
+{
+  const workDir = freshRepo("work-unavailable-vibe");
+  const outDir = join(scratch, "out-unavailable-vibe");
+  mkdirSync(outDir);
+  writeFileSync(join(outDir, "result.json"), "{\"status\":\"stale\"}\n");
+  writeFileSync(join(outDir, "final.txt"), "stale final\n");
+  const missing = spawnSync(process.execPath, [
+    relayPath("vibe"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+  ], { env: { ...process.env, PATH: "" }, encoding: "utf8" });
+  check("vibe unavailable: structured result replaces stale artifacts",
+    missing.status === 127 &&
+    result(outDir).status === "vibe_unavailable" &&
+    !existsSync(join(outDir, "final.txt")));
+}
+if (!WIN) {
+  const workDir = freshRepo("work-abort-preflight-vibe");
+  const outDir = join(scratch, "out-abort-preflight-vibe");
+  const preflight = runRelay("vibe", workDir, outDir, ["--timeout", "1s"], {
+    SMOKE_MODE: "vibe-version-hang",
+  });
+  check("vibe preflight abort: run artifacts are prepared",
+    await until(() => existsSync(join(outDir, "events.jsonl")), 2000));
+  preflight.kill("SIGTERM");
+  const exited = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 5000);
+    preflight.on("close", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check("vibe preflight abort: result is aborted and dispatch never starts",
+    exited &&
+    value.status === "aborted" &&
+    value.signal === "SIGTERM" &&
+    value.error?.includes("version preflight") &&
+    value.error?.includes("was not dispatched"));
+}
+{
+  const workDir = freshRepo("work-nul-brief-vibe");
+  const nulBrief = join(scratch, "nul-vibe-brief.txt");
+  const outDir = join(scratch, "out-nul-brief-vibe");
+  writeFileSync(nulBrief, Buffer.from("brief\0tail"));
+  const rejected = spawnSync(process.execPath, [
+    relayPath("vibe"),
+    "--brief", nulBrief,
+    "--cd", workDir,
+    "--out-dir", outDir,
+  ], { env: baseEnv, encoding: "utf8" });
+  check("vibe validation: NUL brief is rejected before artifacts",
+    rejected.status === 2 && !existsSync(outDir));
+}
+if (WIN) {
+  const workDir = freshRepo("work-long-brief-vibe");
+  const longBrief = join(scratch, "long-vibe-brief.txt");
+  const outDir = join(scratch, "out-long-brief-vibe");
+  writeFileSync(longBrief, "x".repeat(13 * 1024));
+  const rejected = spawnSync(process.execPath, [
+    relayPath("vibe"),
+    "--brief", longBrief,
+    "--cd", workDir,
+    "--out-dir", outDir,
+  ], { env: baseEnv, encoding: "utf8" });
+  check("vibe Windows: oversized argv brief is rejected before artifacts",
+    rejected.status === 2 && !existsSync(outDir));
+}
+
+// ---- every relay publishes result.json atomically ----
+// Slow the filesystem write inside each relay and parse any visible result while it is still
+// running. A direct result.json write exposes half-written JSON; temp + rename never does.
+for (const skill of SKILLS) {
+  const atomicOutDir = join(scratch, `out-atomic-${skill}`);
+  const atomicWorkDir = freshRepo(`work-atomic-${skill}`);
+  const resultPath = join(atomicOutDir, "result.json");
+  const child = runRelay(skill, atomicWorkDir, atomicOutDir, EXTRA_ARGS[skill], {
+    NODE_OPTIONS: slowWriteNodeOptions,
+    SMOKE_MODE: "capture",
+    SMOKE_ARGS_FILE: join(scratch, `args-atomic-${skill}`),
+  });
+  let exitCode;
+  let parseFailed = false;
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.on("close", (code) => { exitCode = code; });
+  const deadline = Date.now() + 15_000;
+  while (exitCode === undefined && Date.now() < deadline) {
+    if (existsSync(resultPath)) {
+      try { result(atomicOutDir); } catch { parseFailed = true; }
+    }
+    await sleep(5);
+  }
+  const timedOut = exitCode === undefined;
+  if (timedOut) child.kill();
+  await until(() => exitCode !== undefined, 5_000);
+  let finalResultValid = false;
+  try { finalResultValid = Boolean(result(atomicOutDir)); } catch {}
+  const leftovers = existsSync(atomicOutDir) ? readdirSync(atomicOutDir).filter((f) => f.includes(".tmp")) : [];
+  check(`${skill} atomic: relay exits`, !timedOut);
+  check(`${skill} atomic: result.json is never partially published`, !parseFailed && finalResultValid);
+  check(`${skill} atomic: no temporary result file survives the run`, leftovers.length === 0);
+  if (timedOut) console.error(`${skill} atomic relay stderr:\n${stderr}`);
+}
+
+// ---- agy --timeout is validated before it can silently fire ----
+// parseDuration returns null for a malformed value, and setTimeout(fn, null) fires on the next
+// tick: an unvalidated flag would turn a typo into an instant, silent "timeout".
+for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "600h"]) {
+  const badRun = spawnSync(process.execPath,
+    [relayPath("agy"), "--brief", briefPath, "--timeout", bad],
+    { env: baseEnv, encoding: "utf8" });
+  check(`agy timeout: "${bad}" is rejected`, badRun.status === 2);
+}
+for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h30m24s", "600h"]) {
+  const badRun = spawnSync(process.execPath,
+    [relayPath("agy"), "--brief", briefPath, "--print-timeout", bad],
+    { env: baseEnv, encoding: "utf8" });
+  check(`agy print timeout: "${bad}" is rejected`, badRun.status === 2);
+}
+{
+  const outDir = join(scratch, "out-agy-version-hang");
+  const preflight = spawnSync(process.execPath, [
+    relayPath("agy"),
+    "--brief", briefPath,
+    "--out-dir", outDir,
+    "--timeout", "1s",
+  ], { env: { ...baseEnv, SMOKE_MODE: "agy-version-hang" }, encoding: "utf8", timeout: 5000 });
+  const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+  check("agy preflight: explicit watchdog bounds a hung version probe",
+    preflight.status === 124 &&
+    value.status === "timeout" &&
+    value.error?.includes("version preflight") &&
+    value.error?.includes("was not dispatched"));
+}
 
 // ---- Qoder's documented print-mode argv and structured result ----
 {
@@ -745,8 +1209,8 @@ for (const scenario of [
 }
 
 // ---- 1. the watchdog fells the whole tree ----
-// agy's watchdog flag is --print-timeout, and it always adds a fixed 60s grace on top,
-// so its run needs about a minute wherever it executes.
+// Use agy's explicit watchdog here: this is the path that bounds a server-side hang
+// beyond agy's own --print-timeout, and it keeps the shared smoke fast.
 const TIMEOUT_CASES = [
   { skill: "claude", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "codex", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
@@ -755,7 +1219,9 @@ const TIMEOUT_CASES = [
   { skill: "kimi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "qoder", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "pi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
-  { skill: "agy", flags: ["--print-timeout", "1s"], exitDeadline: 120_000 },
+  { skill: "cursor", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
+  { skill: "vibe", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
+  { skill: "agy", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
 ];
 async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag) {
   const outDir = join(scratch, `out-${tag}-${skill}`);
@@ -778,6 +1244,13 @@ async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag)
     const r = result(outDir);
     check(`${skill} ${tag}: status is "timeout" (got ${r.status})`, r.status === "timeout");
     check(`${skill} ${tag}: relay exit code is non-zero`, r.exitCode !== 0);
+    if (skill === "agy") {
+      const timeoutIndex = flags.indexOf("--timeout");
+      const expectedLimit = timeoutIndex === -1
+        ? `--print-timeout ${flags[flags.indexOf("--print-timeout") + 1]} plus 60s grace`
+        : `--timeout ${flags[timeoutIndex + 1]}`;
+      check(`agy ${tag}: selected limit is named in the result`, r.error?.includes(expectedLimit));
+    }
   }
   check(`${skill} ${tag}: the implementer process is dead`,
     implementerPid !== null && await until(() => !alive(implementerPid), 20_000));
@@ -789,6 +1262,12 @@ async function driveTimeout({ skill, flags, exitDeadline }, mode, extraEnv, tag)
 for (const tc of TIMEOUT_CASES) {
   await driveTimeout(tc, "timeout", {}, "timeout");
 }
+await driveTimeout(
+  { skill: "agy", flags: ["--print-timeout", "1s", "--timeout", "4s"], exitDeadline: 45_000 },
+  "timeout",
+  {},
+  "timeout-precedence",
+);
 
 // A compliant parent must not shield a defiant descendant: the parent exits on the group
 // SIGTERM, its grandchild ignores it, and the sweep at close must still fell the grandchild
@@ -832,6 +1311,36 @@ if (WIN) {
       grandPid !== null && await until(() => !alive(grandPid), 20_000));
     if (failed) console.error(`${skill} relay stderr tail:\n${stderr.split("\n").slice(-6).join("\n")}`);
   }
+
+  const outDir = join(scratch, "out-abort-defiant-vibe");
+  const pidFile = join(scratch, "pid-abort-defiant-vibe");
+  const grandPidFile = join(scratch, "grandpid-abort-defiant-vibe");
+  const workDir = freshRepo("work-abort-defiant-vibe");
+  const child = runRelay("vibe", workDir, outDir, [], {
+    SMOKE_PID_FILE: pidFile,
+    SMOKE_GRAND_PID_FILE: grandPidFile,
+    SMOKE_GRAND_IGNORES_SIGTERM: "1",
+    SMOKE_MODE: "abort-defiant",
+  });
+  check("vibe defiant abort: the fake implementer came up",
+    await until(() => existsSync(pidFile), 10_000));
+  const implementerPid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : null;
+  const grandPid = existsSync(grandPidFile) ? Number(readFileSync(grandPidFile, "utf8")) : null;
+  child.kill("SIGTERM");
+  const exited = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 5000);
+    child.on("close", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+  check("vibe defiant abort: relay exits after forced termination", exited);
+  check("vibe defiant abort: result is aborted",
+    existsSync(join(outDir, "result.json")) && result(outDir).status === "aborted");
+  check("vibe defiant abort: the implementer process is dead",
+    implementerPid !== null && await until(() => !alive(implementerPid), 5000));
+  check("vibe defiant abort: the implementer's own subprocess is dead",
+    grandPid !== null && await until(() => !alive(grandPid), 5000));
 }
 
 rmSync(scratch, { recursive: true, force: true });
