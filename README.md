@@ -231,8 +231,8 @@ This package is intentionally inspectable:
   forwarding, result parsing, and whole-process-tree timeout/abort cleanup; verified end-to-end on
   macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model
   and 32768-token context window, no commit).
-- `pi-delegate` — verified end-to-end on macOS against `pi` 0.82.1 (stdin brief delivery,
-  explicit provider/model selection, JSON session/provider/model/usage capture, and a
+- `pi-delegate` — verified end-to-end on macOS (stdin brief delivery, explicit provider/model
+  selection, JSON session/provider/model/usage capture, and a
   `--read-only` run leaving a clean tree). Contributor-reported write, `--session`, and
   `--resume-last` runs complement the shared relay suite's success, assistant-error, timeout,
   abort, and bounded-preflight coverage on Linux and Windows; a native Windows launch is
