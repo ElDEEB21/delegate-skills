@@ -214,6 +214,10 @@ class FakeCli {
       Console.WriteLine("fake-cli 0.0.0-smoke");
       return 0;
     }
+    if (Environment.GetEnvironmentVariable("SMOKE_MODE") == "capture") {
+      File.WriteAllLines(Environment.GetEnvironmentVariable("SMOKE_ARGS_FILE"), args);
+      return 0;
+    }
     if (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-success") {
       File.WriteAllLines(Environment.GetEnvironmentVariable("SMOKE_ARGS_FILE"), args);
       Console.WriteLine("{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"qoder-session-1\\",\\"model\\":\\"performance\\",\\"permissionMode\\":\\"auto\\"}");
@@ -276,6 +280,24 @@ if (WIN) {
 const briefPath = join(scratch, "brief.txt");
 writeFileSync(briefPath, "smoke brief: run until killed.");
 const baseEnv = { ...process.env, PATH: shimDir + delimiter + process.env.PATH, SMOKE_NODE: process.execPath };
+const slowWriteHook = join(scratch, "slow-result-write.cjs");
+writeFileSync(slowWriteHook, `const fs = require("node:fs");
+const { syncBuiltinESMExports } = require("node:module");
+const writeFileSync = fs.writeFileSync;
+fs.writeFileSync = function (path, data, options) {
+  if (!String(path).includes("result.json")) return writeFileSync.apply(this, arguments);
+  const encoding = typeof options === "string" ? options : options?.encoding;
+  const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data, encoding);
+  const split = Math.max(1, Math.floor(bytes.length / 2));
+  writeFileSync(path, bytes.subarray(0, split));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+  writeFileSync(path, bytes.subarray(split), { flag: "a" });
+};
+syncBuiltinESMExports();
+`);
+const slowWriteNodeOptions = [process.env.NODE_OPTIONS, `--require=${JSON.stringify(slowWriteHook.replaceAll("\\", "/"))}`]
+  .filter(Boolean)
+  .join(" ");
 
 const freshRepo = (name) => {
   const dir = join(scratch, name);
@@ -464,18 +486,40 @@ if (WIN) {
 }
 
 // ---- every relay publishes result.json atomically ----
-// A poller that waits for the file must never read a half-written one: each relay writes a
-// pid-suffixed temporary and renames it into place, so no .tmp file may survive a finished run.
+// Slow the filesystem write inside each relay and parse any visible result while it is still
+// running. A direct result.json write exposes half-written JSON; temp + rename never does.
 for (const skill of SKILLS) {
   const atomicOutDir = join(scratch, `out-atomic-${skill}`);
   const atomicWorkDir = freshRepo(`work-atomic-${skill}`);
-  spawnSync(process.execPath,
-    [relayPath(skill), "--brief", briefPath, "--cd", atomicWorkDir, "--out-dir", atomicOutDir, ...EXTRA_ARGS[skill]],
-    { env: { ...baseEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: join(scratch, `args-atomic-${skill}`) }, encoding: "utf8" });
+  const resultPath = join(atomicOutDir, "result.json");
+  const child = runRelay(skill, atomicWorkDir, atomicOutDir, EXTRA_ARGS[skill], {
+    NODE_OPTIONS: slowWriteNodeOptions,
+    SMOKE_MODE: "capture",
+    SMOKE_ARGS_FILE: join(scratch, `args-atomic-${skill}`),
+  });
+  let exitCode;
+  let parseFailed = false;
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.on("close", (code) => { exitCode = code; });
+  const deadline = Date.now() + 15_000;
+  while (exitCode === undefined && Date.now() < deadline) {
+    if (existsSync(resultPath)) {
+      try { result(atomicOutDir); } catch { parseFailed = true; }
+    }
+    await sleep(5);
+  }
+  const timedOut = exitCode === undefined;
+  if (timedOut) child.kill();
+  await until(() => exitCode !== undefined, 5_000);
+  let finalResultValid = false;
+  try { finalResultValid = Boolean(result(atomicOutDir)); } catch {}
   const leftovers = existsSync(atomicOutDir) ? readdirSync(atomicOutDir).filter((f) => f.includes(".tmp")) : [];
-  check(`${skill} atomic: result.json exists`, existsSync(join(atomicOutDir, "result.json")));
-  result(atomicOutDir);
+  check(`${skill} atomic: relay exits`, !timedOut);
+  check(`${skill} atomic: result.json is never partially published`, !parseFailed && finalResultValid);
   check(`${skill} atomic: no temporary result file survives the run`, leftovers.length === 0);
+  if (timedOut) console.error(`${skill} atomic relay stderr:\n${stderr}`);
 }
 
 // ---- Qoder's documented print-mode argv and structured result ----
