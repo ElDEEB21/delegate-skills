@@ -28,7 +28,7 @@
  *                 driven there (the skill docs carry the same caveat).
  *
  * Every fake answers each relay's version preflight (--version, `version`,
- * `changelog`). Quick Claude, Qoder, and Vibe success cases verify brief
+ * `changelog`). Quick Claude, Cursor, Qoder, and Vibe success cases verify brief
  * delivery, launch arguments, environment handling, and result-event parsing. The
  * timeout/abort cases otherwise run until killed and spawn a subprocess of
  * their own; both assert that this grandchild dies with the implementer.
@@ -456,10 +456,12 @@ const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"],
   check("cursor read-only: no unreliable porcelain tripwire is published",
     !Object.prototype.hasOwnProperty.call(value, "readOnlyViolation"));
 }
+const cursorNegativeWorkDir = freshRepo("work-negative-cursor");
 for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "600h"]) {
   const rejected = spawnSync(process.execPath, [
     relayPath("cursor"),
     "--brief", briefPath,
+    "--cd", cursorNegativeWorkDir,
     "--timeout", bad,
   ], {
     env: { ...baseEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: join(scratch, "args-invalid-timeout-cursor") },
@@ -479,6 +481,7 @@ for (const [flag, bad] of [
   const rejected = spawnSync(process.execPath, [
     relayPath("cursor"),
     "--brief", briefPath,
+    "--cd", cursorNegativeWorkDir,
     flag, bad,
   ], { env: baseEnv, encoding: "utf8", timeout: 5000 });
   check(`cursor validation: unsafe ${flag} value is rejected`, rejected.status === 2);
@@ -491,6 +494,7 @@ for (const [mode, expectedStatus, expectedExit] of [
   const preflight = spawnSync(process.execPath, [
     relayPath("cursor"),
     "--brief", briefPath,
+    "--cd", cursorNegativeWorkDir,
     "--out-dir", outDir,
     "--timeout", "1s",
   ], { env: { ...baseEnv, SMOKE_MODE: mode }, encoding: "utf8", timeout: 5000 });
@@ -532,6 +536,7 @@ if (!WIN) {
   const missing = spawnSync(process.execPath, [
     relayPath("cursor"),
     "--brief", briefPath,
+    "--cd", cursorNegativeWorkDir,
     "--out-dir", outDir,
   ], { env: { ...process.env, PATH: "" }, encoding: "utf8" });
   check("cursor unavailable: structured result replaces stale artifacts",

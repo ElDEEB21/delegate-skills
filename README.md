@@ -222,8 +222,9 @@ This package is intentionally inspectable:
   `--session <id>` resume applying a delta brief in the same session; usage errors exiting 2 without
   a result file). The shared relay-smoke suite covers model/session/add-directory forwarding,
   `--no-force`, usage, bounded version preflight, atomic artifacts, and timeout/abort handling, and
-  is configured in CI on Linux and Windows. A native macOS plan-mode smoke against the same version
-  completed with model/session/usage capture and no touched files; a native Linux run is unverified.
+  is configured in CI on Linux and Windows. A maintainer-run native macOS plan-mode smoke against
+  the same version completed with model/session/usage capture and no touched files; a native Linux
+  run is unverified.
 - `vibe-delegate` — contract-tested for launch-mode, resume, tool-filter, and turn/price/token
   forwarding; bounded version preflight; result parsing; and whole-process-tree timeout/abort
   cleanup. A live Vibe run and native Windows launch are unverified.
