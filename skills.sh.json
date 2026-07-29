@@ -13,7 +13,8 @@
         "kimi-delegate",
         "qoder-delegate",
         "vibe-delegate",
-        "cursor-delegate"
+        "cursor-delegate",
+        "pi-delegate"
       ]
     }
   ]

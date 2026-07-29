@@ -6,7 +6,7 @@ Skills for **delegating coding work to a separate CLI agent and landing it yours
 orchestrator) writes a self-contained brief, dispatches it to an implementer CLI, then reviews the diff
 and commits — staying the reviewer the whole way.
 
-Nine skills ship today — same loop, different implementer:
+Ten skills ship today — same loop, different implementer:
 
 | Skill | Drives | Autonomy | Resume |
 | --- | --- | --- | --- |
@@ -19,6 +19,7 @@ Nine skills ship today — same loop, different implementer:
 | `qoder-delegate` | [Qoder CLI](https://docs.qoder.com/en/cli/quick-start) (`qodercli`) | `auto` default; bypass is opt-in; effective mode is reported | `--resume-last`, `--resume <id>` |
 | `cursor-delegate` | [Cursor Agent CLI](https://cursor.com/cli) (`cursor-agent`) | `--force` write default; `--no-force` withholds command approval; `--read-only` selects plan mode; `--trust` always | `--resume-last`, `--session <id>` |
 | `vibe-delegate` | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) (`vibe`) | `accept-edits` default; `--full-access` selects `auto-approve`; `--plan-only` selects `plan` | `--resume-last`, `--session <id>` |
+| `pi-delegate` | [Pi CLI](https://github.com/earendil-works/pi-mono) (`pi`) | full local tools by default (no sandbox, no permission modes); `--read-only` restricts callable tools to `read,grep,find,ls`; project trust is opt-in | `--resume-last`, `--session <id>` |
 
 ## Install
 
@@ -59,6 +60,7 @@ Use $claude-delegate to have a separate Claude Code session implement the parser
 Use $codex-delegate to have Codex implement the refactor in services/billing/, then review and commit it.
 Use $kimi-delegate to have Kimi implement the UI cleanup, then review and commit it.
 Use $qoder-delegate to have Qoder implement the parser fix with a 32768-token context window, then review and commit it.
+Use $pi-delegate to have Pi implement the parser fix, then review and commit it.
 Use $codex-delegate to run this queue of migration tasks through Codex while I review each one.
 ```
 
@@ -86,7 +88,7 @@ orchestrators, with the commit on the reviewer.
 ### codex-delegate
 
 Drive the OpenAI Codex CLI as a background implementer. Ships four references (writing the brief,
-dispatch/poll, review/land, multi-task queues) loaded only when needed, and one small helper script.
+dispatch/poll, review/land, multi-task queues) loaded only when needed, and one small relay script.
 
 **You'll feel it when:** a bounded task — a migration, a mechanical refactor, a removal sweep — gets
 handed to Codex, comes back as a clean diff with a structured report, and you commit it after re-running
@@ -147,6 +149,17 @@ permissions or add a sandbox. Turn and token limits can bound a run; `--max-pric
 a hard budget. Vibe's streaming output does not expose the new session id, so use `--resume-last`
 unless you already know a specific id.
 
+### pi-delegate
+
+Same loop for the Pi coding agent CLI (`pi`). The brief rides stdin to `pi --mode json` — no argv
+size cap, nothing in the host process list — and the relay lifts the session id from the JSON
+event stream for later resume. Pi has no sandbox and no permission modes: a default headless run
+writes and executes without prompts, so its controls are `--read-only` (an enforced
+`read,grep,find,ls` callable-tool allowlist, covering extension/custom tools too) and the diff.
+Installed extension code still has the user's host permissions. The relay passes `--no-approve`
+by default; `--approve` is the explicit opt-in for trusted project `.pi` resources. Requested and
+actual provider/model, usage, and stop reason are recorded in `result.json`.
+
 ### gemini-delegate
 
 *Planned.* A delegate skill for the Gemini CLI, if and when it gains a comparable non-interactive mode.
@@ -180,7 +193,9 @@ bundled `relay.mjs` is the default because it needs nothing but the `codex` bina
   `QODER_PERSONAL_ACCESS_TOKEN` for automation) ·
   [`cursor-agent`](https://cursor.com/cli) (`cursor-agent login`) ·
   [`vibe`](https://github.com/mistralai/mistral-vibe) ([install `uv`](https://docs.astral.sh/uv/getting-started/installation/),
-  then run `uv tool install mistral-vibe` and configure `MISTRAL_API_KEY`).
+  then run `uv tool install mistral-vibe` and configure `MISTRAL_API_KEY`) ·
+  [`pi`](https://github.com/earendil-works/pi-mono) (`npm install -g @earendil-works/pi-coding-agent`,
+  then `/login` or an API-key environment variable).
 - Node 18+ and `git`.
 - An orchestrating agent that can run shell commands and read files.
 - Shell examples assume bash/zsh (macOS/Linux, or Git Bash/WSL on Windows).
@@ -216,6 +231,12 @@ This package is intentionally inspectable:
   forwarding, result parsing, and whole-process-tree timeout/abort cleanup; verified end-to-end on
   macOS by the contributor against `qodercli` 1.0.47 (Lite edit run, `accept_edits`, explicit model
   and 32768-token context window, no commit).
+- `pi-delegate` — verified end-to-end on macOS (stdin brief delivery, explicit provider/model
+  selection, JSON session/provider/model/usage capture, and a
+  `--read-only` run leaving a clean tree). Contributor-reported write, `--session`, and
+  `--resume-last` runs complement the shared relay suite's success, assistant-error, timeout,
+  abort, and bounded-preflight coverage on Linux and Windows; a native Windows launch is
+  unverified.
 - `opencode-delegate` — requires `--model`, since OpenCode has no safe default.
 - `cursor-delegate` — verified end-to-end on Windows against `cursor-agent` 2026.07.23-e383d2b (write run
   under `--force` editing real files; plan-mode `--read-only` run touching nothing;
@@ -228,10 +249,11 @@ This package is intentionally inspectable:
 - `vibe-delegate` — contract-tested for launch-mode, resume, tool-filter, and turn/price/token
   forwarding; bounded version preflight; result parsing; and whole-process-tree timeout/abort
   cleanup. A live Vibe run and native Windows launch are unverified.
-- Windows: the codex/opencode launches handle the `.cmd` shim (`shell:true` + quoting); Cursor
-  serializes a pre-joined, quoted command through the shell; Qoder and Vibe target their currently
-  documented native executables. Native Windows launch smokes for
-  `claude`/`agy`/`grok`/`kimi`/`qoder`/`vibe` are still pending. Claude's own shell sandbox is
+- Windows: the codex/opencode/grok/pi launches handle the `.cmd` shim (`shell:true` + validated
+  values where needed); Pi's brief rides stdin. Cursor serializes a pre-joined, quoted command
+  through the shell; Qoder and Vibe target their currently documented native executables. Native
+  Windows launch smokes for `claude`/`agy`/`grok`/`kimi`/`qoder`/`vibe`/`pi` are still pending.
+  Claude's own shell sandbox is
   unsupported on native Windows regardless of launch mechanics. Upstream Vibe works on Windows but
   officially supports and targets UNIX; this repository has not smoke-tested the Vibe relay's native
   Windows launch.

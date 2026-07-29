@@ -7,10 +7,10 @@
  * not complete:
  *
  *   1. timeout  — the watchdog kills the implementer's WHOLE process tree and
- *                 result.json reports status "timeout". Driven for all nine
+ *                 result.json reports status "timeout". Driven for all ten
  *                 relays on both platforms. On Windows, claude and cursor
  *                 launch a .cmd shim through a serialized cmd.exe invocation,
- *                 while codex/opencode/grok use shell:true. These are exactly the
+ *                 while codex/opencode/grok/pi use shell:true. These are exactly the
  *                 cases a plain child.kill would miss; agy, kimi, qoder, and vibe spawn a
  *                 native binary directly — a .cmd stand-in cannot represent them,
  *                 so the smoke compiles a real fake .exe with the C# compiler
@@ -23,12 +23,12 @@
  *   2. aborted  — killing the relay itself still produces result.json with
  *                 status "aborted", and files the implementer flushes during
  *                 the shutdown grace window appear in the refreshed
- *                 touchedFiles. Driven for all nine relays on POSIX; Windows
+ *                 touchedFiles. Driven for all ten relays on POSIX; Windows
  *                 delivers no catchable SIGTERM, so the scenario cannot be
  *                 driven there (the skill docs carry the same caveat).
  *
  * Every fake answers each relay's version preflight (--version, `version`,
- * `changelog`). Quick Claude, Cursor, Qoder, and Vibe success cases verify brief
+ * `changelog`). Quick Claude, Cursor, Qoder, Vibe, and Pi success cases verify brief
  * delivery, launch arguments, environment handling, and result-event parsing. The
  * timeout/abort cases otherwise run until killed and spawn a subprocess of
  * their own; both assert that this grandchild dies with the implementer.
@@ -41,7 +41,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder", "vibe", "cursor"];
+const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder", "vibe", "cursor", "pi"];
 const binaryName = (skill) => skill === "qoder" ? "qodercli" : skill === "cursor" ? "cursor-agent" : skill;
 const relayPath = (skill) => join(here, "..", "skills", `${skill}-delegate`, "scripts", "relay.mjs");
 const WIN = process.platform === "win32";
@@ -84,10 +84,10 @@ for (const skill of SKILLS) {
 // ---- one fake CLI, planted on PATH under every relay's binary name ----
 const FAKE = `const fs = require("node:fs");
 const args = process.argv.slice(2);
-if ((args.includes("--version") && ["qoder-version-hang", "vibe-version-hang", "cursor-version-hang"].includes(process.env.SMOKE_MODE))
+if ((args.includes("--version") && /-version-hang$/.test(process.env.SMOKE_MODE || ""))
     || (args[0] === "changelog" && process.env.SMOKE_MODE === "agy-version-hang")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-} else if (args.includes("--version") && ["qoder-version-fail", "vibe-version-fail", "cursor-version-fail"].includes(process.env.SMOKE_MODE)) {
+} else if (args.includes("--version") && /-version-fail$/.test(process.env.SMOKE_MODE || "")) {
   console.error("fake version failure");
   process.exit(7);
 } else if (args.includes("--version") || args[0] === "version" || args[0] === "changelog") {
@@ -128,7 +128,31 @@ if (process.env.SMOKE_MODE === "vibe-success") {
   console.log(JSON.stringify({ role: "assistant", content: "fake vibe completed" }));
   process.exit(0);
 }
-if (["cursor-success", "claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
+if (["pi-success", "pi-error"].includes(process.env.SMOKE_MODE)) {
+  let brief = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => { brief += chunk; });
+  process.stdin.on("end", () => {
+    const failed = process.env.SMOKE_MODE === "pi-error";
+    fs.writeFileSync(process.env.SMOKE_ARGS_FILE, JSON.stringify({ args, brief }));
+    console.log(JSON.stringify({ type: "session", version: 3, id: "pi-session-1", timestamp: "2026-01-01T00:00:00.000Z", cwd: process.cwd() }));
+    console.log(JSON.stringify({ type: "agent_start" }));
+    console.log(JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: failed ? "fake pi failed" : "fake pi completed" }],
+        provider: "google",
+        model: "fake-model",
+        usage: { input: 7, output: 2, cacheRead: 1, cacheWrite: 0, totalTokens: 10, cost: { total: 0.001 } },
+        stopReason: failed ? "error" : "stop",
+        ...(failed ? { errorMessage: "fake provider failure" } : {}),
+      },
+    }));
+    console.log(JSON.stringify({ type: "agent_end", messages: [] }));
+    process.exit(0);
+  });
+} else if (["cursor-success", "claude-success", "claude-read-only-write", "claude-read-only-clean", "claude-chunked"].includes(process.env.SMOKE_MODE)) {
   let brief = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => { brief += chunk; });
@@ -268,7 +292,7 @@ const shimDir = join(scratch, "shim");
 mkdirSync(shimDir);
 writeFileSync(join(shimDir, "fake-cli.cjs"), FAKE);
 if (WIN) {
-  for (const skill of ["claude", "codex", "opencode", "grok", "cursor"]) {
+  for (const skill of ["claude", "codex", "opencode", "grok", "cursor", "pi"]) {
     writeFileSync(join(shimDir, `${binaryName(skill)}.cmd`), `@node "%~dp0fake-cli.cjs" %*\r\n`);
   }
   const windir = process.env.WINDIR || "C:\\Windows";
@@ -380,7 +404,7 @@ const emptyEffortRun = spawnSync(process.execPath,
 check("codex effort: an empty value is rejected", emptyEffortRun.status === 2);
 
 // opencode refuses a fresh run without an explicit model
-const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [], vibe: [], cursor: [] };
+const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"], agy: [], grok: [], kimi: [], qoder: [], vibe: [], cursor: [], pi: [] };
 
 // ---- Cursor's session/model controls and structured result ----
 {
@@ -910,6 +934,199 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
   }
 }
 
+// ---- pi's stdin brief, JSON event stream, and bounded preflight ----
+{
+  const outDir = join(scratch, "out-success-pi");
+  const workDir = freshRepo("work-success-pi");
+  const argsFile = join(scratch, "args-success-pi");
+  const run = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    "--provider", "google",
+    "--model", "google/fake-model",
+    "--read-only",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "pi-success", SMOKE_ARGS_FILE: argsFile },
+    encoding: "utf8",
+  });
+  const capture = existsSync(argsFile) ? JSON.parse(readFileSync(argsFile, "utf8")) : {};
+  check("pi success: relay exits zero", run.status === 0);
+  check("pi success: documented argv is exact",
+    JSON.stringify(capture.args) === JSON.stringify([
+      "--mode", "json",
+      "--provider", "google",
+      "--model", "google/fake-model",
+      "--no-approve",
+      "--tools", "read,grep,find,ls",
+    ]));
+  check("pi success: brief delivered through stdin", capture.brief === "smoke brief: run until killed.");
+  check("pi success: result.json exists", existsSync(join(outDir, "result.json")));
+  if (existsSync(join(outDir, "result.json"))) {
+    const value = result(outDir);
+    check("pi success: session header and message_end parsed",
+      value.status === "completed" &&
+      value.sessionId === "pi-session-1" &&
+      value.finalMessage === "fake pi completed" &&
+      value.readOnly === true &&
+      value.projectTrusted === false &&
+      value.provider === "google" &&
+      value.model === "google/fake-model" &&
+      value.actualProvider === "google" &&
+      value.actualModel === "fake-model" &&
+      value.usage?.input === 7 &&
+      value.usage?.output === 2 &&
+      value.stopReason === "stop" &&
+      value.resumed === false);
+  }
+
+  const approveOutDir = join(scratch, "out-approve-pi");
+  const approveArgsFile = join(scratch, "args-approve-pi");
+  const approveRun = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", approveOutDir,
+    "--approve",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "pi-success", SMOKE_ARGS_FILE: approveArgsFile },
+    encoding: "utf8",
+  });
+  const approveCapture = existsSync(approveArgsFile) ? JSON.parse(readFileSync(approveArgsFile, "utf8")) : {};
+  check("pi project trust: --approve is explicit and recorded",
+    approveRun.status === 0 &&
+    JSON.stringify(approveCapture.args) === JSON.stringify(["--mode", "json", "--approve"]) &&
+    result(approveOutDir).projectTrusted === true);
+
+  const unsafeProvider = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--provider", "google & whoami",
+  ], { env: baseEnv, encoding: "utf8" });
+  check("pi provider: shell-unsafe value is rejected", unsafeProvider.status === 2);
+
+  const errorOutDir = join(scratch, "out-error-pi");
+  const errorArgsFile = join(scratch, "args-error-pi");
+  const errorRun = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", errorOutDir,
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "pi-error", SMOKE_ARGS_FILE: errorArgsFile },
+    encoding: "utf8",
+  });
+  const errorResult = existsSync(join(errorOutDir, "result.json")) ? result(errorOutDir) : {};
+  check("pi assistant error: exit-zero event is reported as failed",
+    errorRun.status === 1 &&
+    errorResult.status === "failed" &&
+    errorResult.exitCode === 1 &&
+    errorResult.stopReason === "error" &&
+    errorResult.error === "fake provider failure");
+
+  const resumeOutDir = join(scratch, "out-resume-last-pi");
+  const resumeArgsFile = join(scratch, "args-resume-last-pi");
+  const resume = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", resumeOutDir,
+    "--resume-last",
+  ], {
+    env: { ...baseEnv, SMOKE_MODE: "pi-success", SMOKE_ARGS_FILE: resumeArgsFile },
+    encoding: "utf8",
+  });
+  const resumeCapture = existsSync(resumeArgsFile) ? JSON.parse(readFileSync(resumeArgsFile, "utf8")) : {};
+  check("pi resume-last: uses documented --continue",
+    resume.status === 0 &&
+    resumeCapture.args.includes("--continue") &&
+    !resumeCapture.args.includes("--session") &&
+    existsSync(join(resumeOutDir, "result.json")) &&
+    result(resumeOutDir).resumed === true);
+
+  const zeroTimeoutOutDir = join(scratch, "out-zero-timeout-pi");
+  const zeroTimeout = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", zeroTimeoutOutDir,
+    "--timeout", "0s",
+  ], { env: baseEnv, encoding: "utf8" });
+  check("pi validation: zero timeout is rejected before artifacts",
+    zeroTimeout.status === 2 && !existsSync(zeroTimeoutOutDir));
+
+  const hugeTimeoutOutDir = join(scratch, "out-huge-timeout-pi");
+  const hugeTimeout = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", hugeTimeoutOutDir,
+    "--timeout", "10000h",
+  ], { env: baseEnv, encoding: "utf8" });
+  check("pi validation: a timeout beyond Node's timer range is rejected before artifacts",
+    hugeTimeout.status === 2 && !existsSync(hugeTimeoutOutDir));
+
+  const missingOutDir = join(scratch, "out-unavailable-pi");
+  const missing = spawnSync(process.execPath, [
+    relayPath("pi"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", missingOutDir,
+  ], { env: { ...process.env, PATH: "" }, encoding: "utf8" });
+  check("pi unavailable: missing binary writes the structured result",
+    missing.status === 127 &&
+    existsSync(join(missingOutDir, "result.json")) &&
+    result(missingOutDir).status === "pi_unavailable");
+
+  for (const [mode, expectedStatus, expectedExit] of [
+    ["pi-version-fail", "failed", 7],
+    ["pi-version-hang", "timeout", 124],
+  ]) {
+    const preflightOutDir = join(scratch, `out-${mode}`);
+    const preflight = spawnSync(process.execPath, [
+      relayPath("pi"),
+      "--brief", briefPath,
+      "--cd", workDir,
+      "--out-dir", preflightOutDir,
+      "--timeout", "1s",
+    ], { env: { ...baseEnv, SMOKE_MODE: mode }, encoding: "utf8", timeout: 5000 });
+    const preflightResult = existsSync(join(preflightOutDir, "result.json"))
+      ? result(preflightOutDir)
+      : {};
+    check(`pi preflight: ${mode} is explicit and prevents dispatch`,
+      preflight.status === expectedExit &&
+      preflightResult.status === expectedStatus &&
+      preflightResult.error?.includes("version preflight") &&
+      preflightResult.error?.includes("was not dispatched"));
+  }
+
+  if (!WIN) {
+    const preflightOutDir = join(scratch, "out-abort-preflight-pi");
+    const preflight = runRelay("pi", workDir, preflightOutDir, ["--timeout", "1s"], {
+      SMOKE_MODE: "pi-version-hang",
+    });
+    check("pi preflight abort: run artifacts are prepared",
+      await until(() => existsSync(join(preflightOutDir, "events.jsonl")), 2000));
+    preflight.kill("SIGTERM");
+    const exited = await new Promise((resolveExit) => {
+      const timer = setTimeout(() => resolveExit(false), 5000);
+      preflight.on("close", () => {
+        clearTimeout(timer);
+        resolveExit(true);
+      });
+    });
+    const value = existsSync(join(preflightOutDir, "result.json")) ? result(preflightOutDir) : {};
+    check("pi preflight abort: result is aborted and dispatch never starts",
+      exited &&
+      value.status === "aborted" &&
+      value.signal === "SIGTERM" &&
+      value.error?.includes("version preflight") &&
+      value.error?.includes("was not dispatched"));
+  }
+}
+
 // ---- Claude's completed stream contract and nested launch environment ----
 {
   const outDir = join(scratch, "out success claude");
@@ -1090,6 +1307,7 @@ const TIMEOUT_CASES = [
   { skill: "grok", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "kimi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "qoder", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
+  { skill: "pi", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "cursor", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "vibe", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
   { skill: "agy", flags: ["--timeout", "6s"], exitDeadline: 45_000 },
