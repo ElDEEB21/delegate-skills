@@ -28,7 +28,10 @@
  *                 driven there (the skill docs carry the same caveat).
  *
  * Every fake answers each relay's version preflight (--version, `version`,
- * `changelog`). Quick Claude, Cursor, Qoder, Vibe, and Pi success cases verify brief
+ * `changelog`), and can be told to hang or fail that probe by mode name, so a
+ * relay whose preflight is unbounded — wedging before any result.json exists —
+ * or which reports a broken CLI as a missing one is caught here.
+ * Quick Claude, Cursor, Qoder, Vibe, and Pi success cases verify brief
  * delivery, launch arguments, environment handling, and result-event parsing. The
  * timeout/abort cases otherwise run until killed and spawn a subprocess of
  * their own; both assert that this grandchild dies with the implementer.
@@ -113,13 +116,15 @@ for (const skill of SKILLS) {
 // ---- one fake CLI, planted on PATH under every relay's binary name ----
 const FAKE = `const fs = require("node:fs");
 const args = process.argv.slice(2);
-if ((args.includes("--version") && /-version-hang$/.test(process.env.SMOKE_MODE || ""))
-    || (args[0] === "changelog" && process.env.SMOKE_MODE === "agy-version-hang")) {
+// Every probe form one relay or another uses: --version, grok's \`version\` subcommand, and
+// agy's \`changelog\`. Treating them alike lets any relay's hang/fail mode be driven by name.
+const versionProbe = args.includes("--version") || args[0] === "version" || args[0] === "changelog";
+if (versionProbe && /-version-hang$/.test(process.env.SMOKE_MODE || "")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-} else if (args.includes("--version") && /-version-fail$/.test(process.env.SMOKE_MODE || "")) {
+} else if (versionProbe && /-version-fail$/.test(process.env.SMOKE_MODE || "")) {
   console.error("fake version failure");
   process.exit(7);
-} else if (args.includes("--version") || args[0] === "version" || args[0] === "changelog") {
+} else if (versionProbe) {
   console.log("fake-cli 0.0.0-smoke");
   process.exit(0);
 }
@@ -273,16 +278,20 @@ using System.IO;
 using System.Threading;
 class FakeCli {
   static int Main(string[] args) {
-    if ((Array.IndexOf(args, "--version") >= 0 && (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-hang" || Environment.GetEnvironmentVariable("SMOKE_MODE") == "vibe-version-hang"))
-        || (args.Length > 0 && args[0] == "changelog" && Environment.GetEnvironmentVariable("SMOKE_MODE") == "agy-version-hang")) {
+    // Mirrors the .cjs fake: any probe form, and hang/fail selected by the mode's suffix,
+    // so a native-binary relay (agy, kimi, qoder, vibe) enters the same preflight matrix.
+    var mode = Environment.GetEnvironmentVariable("SMOKE_MODE") ?? "";
+    bool versionProbe = Array.IndexOf(args, "--version") >= 0
+      || (args.Length > 0 && (args[0] == "version" || args[0] == "changelog"));
+    if (versionProbe && mode.EndsWith("-version-hang")) {
       Thread.Sleep(Timeout.Infinite);
       return 1;
     }
-    if (Array.IndexOf(args, "--version") >= 0 && (Environment.GetEnvironmentVariable("SMOKE_MODE") == "qoder-version-fail" || Environment.GetEnvironmentVariable("SMOKE_MODE") == "vibe-version-fail")) {
+    if (versionProbe && mode.EndsWith("-version-fail")) {
       Console.Error.WriteLine("fake version failure");
       return 7;
     }
-    if (Array.IndexOf(args, "--version") >= 0 || (args.Length > 0 && (args[0] == "version" || args[0] == "changelog"))) {
+    if (versionProbe) {
       Console.WriteLine("fake-cli 0.0.0-smoke");
       return 0;
     }
@@ -783,6 +792,49 @@ for (const skill of SKILLS) {
   check(`${skill} atomic: result.json is never partially published`, !parseFailed && finalResultValid);
   check(`${skill} atomic: no temporary result file survives the run`, leftovers.length === 0);
   if (timedOut) console.error(`${skill} atomic relay stderr:\n${stderr}`);
+}
+
+// ---- the version preflight is bounded and classified, not open-ended ----
+// The probe runs before the watchdog is armed, so an implementer that never answers its
+// version query would wedge the relay with no result.json and no --timeout able to reach it.
+// A probe that *fails* is a distinct outcome from a missing binary: reporting exit 127
+// "not installed" for a CLI that is installed but broken sends the caller to reinstall it.
+for (const skill of ["codex", "opencode", "grok", "kimi"]) {
+  const workDir = freshRepo(`work-preflight-${skill}`);
+  for (const [suffix, expectedStatus, expectedExit] of [
+    ["version-hang", "timeout", 124],
+    ["version-fail", "failed", 7],
+  ]) {
+    const outDir = join(scratch, `out-${skill}-${suffix}`);
+    const preflight = spawnSync(process.execPath, [
+      relayPath(skill),
+      "--brief", briefPath,
+      "--cd", workDir,
+      "--out-dir", outDir,
+      "--timeout", "1s",
+      ...EXTRA_ARGS[skill],
+    ], { env: { ...baseEnv, SMOKE_MODE: `${skill}-${suffix}` }, encoding: "utf8", timeout: 15_000 });
+    const value = existsSync(join(outDir, "result.json")) ? result(outDir) : {};
+    check(`${skill} preflight: ${skill}-${suffix} is explicit and prevents dispatch`,
+      preflight.status === expectedExit &&
+      value.status === expectedStatus &&
+      value.error?.includes("version preflight") &&
+      value.error?.includes("was not dispatched"));
+  }
+  // A missing binary must stay distinguishable from a broken one, so the classification
+  // added above cannot quietly turn "not installed" into a generic failure.
+  const missingOutDir = join(scratch, `out-unavailable-${skill}`);
+  const missing = spawnSync(process.execPath, [
+    relayPath(skill),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", missingOutDir,
+    ...EXTRA_ARGS[skill],
+  ], { env: { ...process.env, PATH: "" }, encoding: "utf8", timeout: 15_000 });
+  check(`${skill} unavailable: missing binary still reports ${skill}_unavailable`,
+    missing.status === 127 &&
+    existsSync(join(missingOutDir, "result.json")) &&
+    result(missingOutDir).status === `${skill}_unavailable`);
 }
 
 // ---- agy --timeout is validated before it can silently fire ----

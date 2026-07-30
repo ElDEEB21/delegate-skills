@@ -71,6 +71,7 @@ import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
+const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
@@ -196,15 +197,39 @@ function readBrief(opts) {
   return stdin;
 }
 
-function codexVersion() {
+function versionProbeTimeout(opts) {
+  // The watchdog is only armed once codex is running, so the preflight needs a bound of
+  // its own: a `codex --version` that never returns would wedge the relay here, before
+  // any result.json exists, and --timeout could not reach it.
+  const timeoutMs = opts.timeout === null ? null : parseDuration(opts.timeout);
+  return timeoutMs === null ? VERSION_PROBE_TIMEOUT_MS : Math.min(timeoutMs, VERSION_PROBE_TIMEOUT_MS);
+}
+
+function codexVersion(probeTimeoutMs) {
   try {
     // On Windows, npm installs `codex` as a .cmd shim; Node's CreateProcess only
     // auto-appends .exe, never .cmd, so launching it needs shell:true there or it
     // ENOENTs on a working install. POSIX is unaffected. (git installs a real
     // git.exe and must NOT get this flag — see gitTouchedFiles.)
-    return execFileSync("codex", ["--version"], { encoding: "utf8", shell: process.platform === "win32" }).trim();
-  } catch {
-    return null;
+    const version = execFileSync("codex", ["--version"], {
+      encoding: "utf8",
+      shell: process.platform === "win32",
+      timeout: probeTimeoutMs,
+      killSignal: "SIGKILL",
+    }).trim();
+    return { version: version || "unknown", error: null };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { version: null, error: null };
+    // shell:true routes a missing binary through cmd.exe, which reports it as a non-zero
+    // exit rather than ENOENT; that is still "not installed", not a broken install.
+    if (process.platform === "win32" &&
+        /not recognized as an internal or external command/i.test(String(error?.stderr || ""))) {
+      return { version: null, error: null };
+    }
+    // Anything else — a hung probe we killed, or a real non-zero exit — means codex is
+    // installed but not usable. Reporting that as "unavailable" would send the caller
+    // off to reinstall a binary that is already there.
+    return { version: null, error };
   }
 }
 
@@ -323,6 +348,27 @@ function reportUnavailable(writeResult, resultPath) {
   printSummary(result, resultPath);
   process.stderr.write("relay: `codex` not found on PATH. Install it (npm i -g @openai/codex) and run `codex login`.\n");
   process.exit(127);
+}
+
+function reportVersionFailure(opts, writeResult, run, error, probeTimeoutMs) {
+  const timedOut = error?.code === "ETIMEDOUT";
+  const stderr = String(error?.stderr || "").trim();
+  const message = timedOut
+    ? `codex --version preflight timed out after ${probeTimeoutMs}ms; Codex was not dispatched`
+    : `codex --version preflight failed${Number.isInteger(error?.status) ? ` with exit ${error.status}` : ""}; Codex was not dispatched`;
+  const result = writeResult({
+    status: timedOut ? "timeout" : "failed",
+    exitCode: timedOut ? 124 : Number.isInteger(error?.status) ? error.status : 1,
+    signal: null,
+    threadId: null,
+    finalMessage: "",
+    touchedFiles: gitTouchedFiles(opts.cd),
+    ...(stderr ? { stderrTail: stderr.split("\n").slice(-20) } : {}),
+    error: message,
+  });
+  printSummary(result, run.resultPath);
+  process.stderr.write(`relay: ${message}\n`);
+  process.exit(result.exitCode);
 }
 
 function dispatchToCodex(opts, brief, run, writeResult) {
@@ -471,12 +517,19 @@ function main() {
   const brief = readBrief(opts);
   if (!brief.trim()) fail("empty brief (pass --brief <file> or pipe the brief on stdin)");
 
-  const version = codexVersion();
+  // Prepare the run dir before probing, so a preflight that times out or fails still has
+  // somewhere to publish result.json rather than exiting silently.
   const run = prepareRunDir(opts, brief);
-  const writeResult = makeResultWriter(opts, version, run);
+  const probeTimeoutMs = versionProbeTimeout(opts);
+  const probe = codexVersion(probeTimeoutMs);
+  const writeResult = makeResultWriter(opts, probe.version, run);
 
-  if (!version) {
+  if (!probe.version && !probe.error) {
     reportUnavailable(writeResult, run.resultPath);
+    return;
+  }
+  if (probe.error) {
+    reportVersionFailure(opts, writeResult, run, probe.error, probeTimeoutMs);
     return;
   }
 

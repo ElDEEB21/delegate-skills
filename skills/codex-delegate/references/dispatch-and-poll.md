@@ -87,6 +87,10 @@ process has exited and `result.json` is written — not when a status line says 
 
 - **`status: codex_unavailable` (exit 127):** `codex` isn't on PATH or isn't found. Install
   (`npm i -g @openai/codex`) and `codex login`, then re-dispatch.
+- **an `error` mentioning `version preflight` (`failed`, or `timeout` at exit 124):** the bounded
+  `codex --version` probe exited non-zero or hung past its cap (10s, or `--timeout` when shorter), so
+  codex was never dispatched and the working tree is untouched. Check the install by running
+  `codex --version` yourself.
 - **`status: failed`:** read `result.json`'s `stderrTail` and the tail of `eventsPath` for the cause.
   Common causes: an auth lapse, an invalid `--model` or unsupported `--effort`, or a sandbox that
   blocked something the task needed. Fix the cause and re-dispatch; don't paper over it by doing the
