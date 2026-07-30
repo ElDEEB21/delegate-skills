@@ -28,7 +28,10 @@
  *                 driven there (the skill docs carry the same caveat).
  *
  * Every fake answers each relay's version preflight (--version, `version`,
- * `changelog`). Quick Claude, Cursor, Qoder, Vibe, and Pi success cases verify brief
+ * `changelog`). A shared matrix drives all ten through the --timeout values no
+ * watchdog can honour — malformed, zero, and past Node's timer ceiling — each of
+ * which would otherwise fire on the next tick as a silent instant "timeout".
+ * Quick Claude, Cursor, Qoder, Vibe, and Pi success cases verify brief
  * delivery, launch arguments, environment handling, and result-event parsing. The
  * timeout/abort cases otherwise run until killed and spawn a subprocess of
  * their own; both assert that this grandchild dies with the implementer.
@@ -510,19 +513,6 @@ const EXTRA_ARGS = { claude: [], codex: [], opencode: ["--model", "fake/model"],
     !Object.prototype.hasOwnProperty.call(value, "readOnlyViolation"));
 }
 const cursorNegativeWorkDir = freshRepo("work-negative-cursor");
-for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "600h"]) {
-  const rejected = spawnSync(process.execPath, [
-    relayPath("cursor"),
-    "--brief", briefPath,
-    "--cd", cursorNegativeWorkDir,
-    "--timeout", bad,
-  ], {
-    env: { ...baseEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: join(scratch, "args-invalid-timeout-cursor") },
-    encoding: "utf8",
-    timeout: 5000,
-  });
-  check(`cursor timeout: "${bad}" is rejected`, rejected.status === 2);
-}
 for (const [flag, bad] of [
   ["--session", ""],
   ["--session", "--continue"],
@@ -785,15 +775,42 @@ for (const skill of SKILLS) {
   if (timedOut) console.error(`${skill} atomic relay stderr:\n${stderr}`);
 }
 
-// ---- agy --timeout is validated before it can silently fire ----
-// parseDuration returns null for a malformed value, and setTimeout(fn, null) fires on the next
-// tick: an unvalidated flag would turn a typo into an instant, silent "timeout".
-for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "600h"]) {
-  const badRun = spawnSync(process.execPath,
-    [relayPath("agy"), "--brief", briefPath, "--timeout", bad],
-    { env: baseEnv, encoding: "utf8" });
-  check(`agy timeout: "${bad}" is rejected`, badRun.status === 2);
+// ---- no relay accepts a --timeout its watchdog cannot honour ----
+// Driven for all ten, because an unhonourable delay turns a typo into an instant, silent
+// "timeout" — the one failure mode a watchdog must never have. Two ways in: parseDuration
+// returns null for a malformed value and setTimeout(fn, null) fires on the next tick; and a
+// delay past 2^31-1 ms overflows and fires immediately too, so "600h" would fell the
+// implementer half a second in and report a 25-day budget as already spent. Both are usage
+// errors, so both must exit 2 before any artifact exists.
+const badTimeoutWorkDir = freshRepo("work-bad-timeout");
+for (const skill of SKILLS) {
+  for (const bad of ["NONSENSE", "", "10", "10s-junk", "1.5s", "1h30", "0s", "596h31m24s", "600h", "10000h"]) {
+    const outDir = join(scratch, `out-bad-timeout-${skill}`);
+    const rejected = spawnSync(process.execPath, [
+      relayPath(skill),
+      "--brief", briefPath,
+      "--cd", badTimeoutWorkDir,
+      "--out-dir", outDir,
+      "--timeout", bad,
+      ...EXTRA_ARGS[skill],
+    ], { env: baseEnv, encoding: "utf8", timeout: 10_000 });
+    check(`${skill} timeout: "${bad}" is rejected before artifacts`,
+      rejected.status === 2 && !existsSync(outDir));
+  }
+  // Positive control for the bound above: the largest duration the h/m/s grammar can express
+  // under the ceiling is still a legitimate budget, so validation must not over-reject the edge.
+  const accepted = spawnSync(process.execPath, [
+    relayPath(skill),
+    "--brief", briefPath,
+    "--cd", badTimeoutWorkDir,
+    "--out-dir", join(scratch, `out-max-timeout-${skill}`),
+    "--timeout", "596h31m23s",
+    ...EXTRA_ARGS[skill],
+  ], { env: { ...process.env, PATH: "" }, encoding: "utf8", timeout: 10_000 });
+  check(`${skill} timeout: the largest schedulable duration is accepted`, accepted.status !== 2);
 }
+// agy's own --print-timeout carries a 60s grace into the same watchdog, so its ceiling sits
+// one grace window lower and it needs its own row.
 for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h30m24s", "600h"]) {
   const badRun = spawnSync(process.execPath,
     [relayPath("agy"), "--brief", briefPath, "--print-timeout", bad],
@@ -874,17 +891,6 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
   ], { env: baseEnv, encoding: "utf8" });
   check("qoder validation: non-positive context is rejected before artifacts",
     invalid.status === 2 && !existsSync(invalidOutDir));
-
-  const zeroTimeoutOutDir = join(scratch, "out-zero-timeout-qoder");
-  const zeroTimeout = spawnSync(process.execPath, [
-    relayPath("qoder"),
-    "--brief", briefPath,
-    "--cd", workDir,
-    "--out-dir", zeroTimeoutOutDir,
-    "--timeout", "0s",
-  ], { env: baseEnv, encoding: "utf8" });
-  check("qoder validation: zero timeout is rejected before preflight",
-    zeroTimeout.status === 2 && !existsSync(zeroTimeoutOutDir));
 
   const latestOutDir = join(scratch, "out-resume-last-qoder");
   const latestArgsFile = join(scratch, "args-resume-last-qoder");
@@ -1074,28 +1080,6 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
     !resumeCapture.args.includes("--session") &&
     existsSync(join(resumeOutDir, "result.json")) &&
     result(resumeOutDir).resumed === true);
-
-  const zeroTimeoutOutDir = join(scratch, "out-zero-timeout-pi");
-  const zeroTimeout = spawnSync(process.execPath, [
-    relayPath("pi"),
-    "--brief", briefPath,
-    "--cd", workDir,
-    "--out-dir", zeroTimeoutOutDir,
-    "--timeout", "0s",
-  ], { env: baseEnv, encoding: "utf8" });
-  check("pi validation: zero timeout is rejected before artifacts",
-    zeroTimeout.status === 2 && !existsSync(zeroTimeoutOutDir));
-
-  const hugeTimeoutOutDir = join(scratch, "out-huge-timeout-pi");
-  const hugeTimeout = spawnSync(process.execPath, [
-    relayPath("pi"),
-    "--brief", briefPath,
-    "--cd", workDir,
-    "--out-dir", hugeTimeoutOutDir,
-    "--timeout", "10000h",
-  ], { env: baseEnv, encoding: "utf8" });
-  check("pi validation: a timeout beyond Node's timer range is rejected before artifacts",
-    hugeTimeout.status === 2 && !existsSync(hugeTimeoutOutDir));
 
   const missingOutDir = join(scratch, "out-unavailable-pi");
   const missing = spawnSync(process.execPath, [
