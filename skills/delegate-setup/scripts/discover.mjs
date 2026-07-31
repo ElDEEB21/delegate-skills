@@ -39,7 +39,8 @@ function resolveBinary(binary) {
   if (!pathValue) return null;
   const pathEntries = pathValue
     .split(delimiter)
-    .map((entry) => entry.replace(/^"(.*)"$/, "$1"));
+    .map((entry) => entry.replace(/^"(.*)"$/, "$1"))
+    .filter((entry) => entry.length > 0);
 
   if (process.platform === "win32") {
     const pathExt = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
@@ -47,7 +48,7 @@ function resolveBinary(binary) {
       .map((ext) => ext.trim().toLowerCase())
       .filter(Boolean);
     for (const entry of pathEntries) {
-      const dir = resolve(entry || ".");
+      const dir = resolve(entry);
       for (const ext of pathExt) {
         const candidate = join(dir, `${binary}${ext}`);
         try {
@@ -61,7 +62,7 @@ function resolveBinary(binary) {
   }
 
   for (const entry of pathEntries) {
-    const candidate = join(resolve(entry || "."), binary);
+    const candidate = join(resolve(entry), binary);
     try {
       accessSync(candidate, fsConstants.X_OK);
       if (statSync(candidate).isFile()) return candidate;
@@ -76,8 +77,17 @@ function needsWindowsShell(impl, binaryPath) {
   return process.platform === "win32" && (impl.winShell || /\.(?:cmd|bat)$/i.test(binaryPath));
 }
 
+/** Quote a path for cmd.exe when shell:true; reject metacharacters. */
+function quoteForCmd(value) {
+  if (/[\r\n%!]/.test(value) || value.includes('"')) {
+    throw new Error(`unsafe path for Windows shell probe: ${value}`);
+  }
+  return `"${value}"`;
+}
+
 function runProbe(binaryPath, args, useShell) {
-  return execFileSync(binaryPath, args, {
+  const command = useShell ? quoteForCmd(binaryPath) : binaryPath;
+  return execFileSync(command, args, {
     encoding: "utf8",
     timeout: PROBE_TIMEOUT_MS,
     stdio: ["pipe", "pipe", "pipe"],
@@ -102,27 +112,34 @@ function probeVersion(impl, binaryPath) {
   return version;
 }
 
+function readAuthField(raw, jsonField) {
+  try {
+    const field = JSON.parse(raw)[jsonField];
+    return typeof field === "boolean" ? field : null;
+  } catch {
+    return null;
+  }
+}
+
 function probeAuth(impl, binaryPath) {
   if (!impl.authProbe) return null;
   const useShell = needsWindowsShell(impl, binaryPath);
   try {
     const raw = runProbe(binaryPath, impl.authProbe.args, useShell);
     if (impl.authProbe.jsonField) {
-      return JSON.parse(raw)[impl.authProbe.jsonField] === true;
+      return readAuthField(raw, impl.authProbe.jsonField);
     }
     return true;
   } catch (error) {
     if (impl.authProbe.jsonField) {
-      try {
-        const combined = `${error.stdout || ""}${error.stderr || ""}`;
-        if (combined.trim()) {
-          return JSON.parse(combined)[impl.authProbe.jsonField] === true;
-        }
-      } catch {
-        // fall through
+      const combined = `${error.stdout || ""}${error.stderr || ""}`;
+      if (combined.trim()) {
+        const parsed = readAuthField(combined, impl.authProbe.jsonField);
+        if (parsed !== null) return parsed;
       }
+      return null;
     }
-    return false;
+    return null;
   }
 }
 

@@ -46,7 +46,11 @@ load prints the effective lane map (project whole-lane replaces global) as JSON.
 `;
 
 export function globalConfigPath() {
-  return join(homedir(), ".config", "delegate-skills", "config.json");
+  // Prefer XDG when set; otherwise ~/.config (homedir() → HOME / USERPROFILE).
+  const base = process.env.XDG_CONFIG_HOME
+    ? process.env.XDG_CONFIG_HOME
+    : join(homedir(), ".config");
+  return join(base, "delegate-skills", "config.json");
 }
 
 export function findGitRoot(cwd) {
@@ -132,7 +136,7 @@ function validateLane(name, lane, label) {
 export function readConfigFile(path) {
   if (!path || !existsSync(path)) return null;
   const parsed = parseConfigDocument(readFileSync(path, "utf8"), path);
-  if (!parsed.ok) fail(parsed.error);
+  if (!parsed.ok) throw new Error(parsed.error);
   return { path, document: parsed.document };
 }
 
@@ -178,7 +182,7 @@ export function loadEffective(cwd = process.cwd()) {
 
 export function writeAtomic(targetPath, document) {
   const parsed = parseConfigDocument(JSON.stringify(document), "write payload");
-  if (!parsed.ok) fail(parsed.error);
+  if (!parsed.ok) throw new Error(parsed.error);
   mkdirSync(dirname(targetPath), { recursive: true });
   // Temp file must live beside the target: renameSync across drives fails on Windows (EXDEV).
   const tmp = join(
@@ -199,54 +203,58 @@ export function writeAtomic(targetPath, document) {
 }
 
 function main(argv) {
-  if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
-    process.stdout.write(HELP);
-    process.exit(argv.length === 0 ? 2 : 0);
-  }
+  try {
+    if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
+      process.stdout.write(HELP);
+      process.exit(argv.length === 0 ? 2 : 0);
+    }
 
-  const cmd = argv[0];
-  let cwd = process.cwd();
-  const cwdIdx = argv.indexOf("--cwd");
-  if (cwdIdx !== -1) {
-    if (!argv[cwdIdx + 1]) fail("--cwd needs a directory");
-    cwd = resolve(argv[cwdIdx + 1]);
-  }
+    const cmd = argv[0];
+    let cwd = process.cwd();
+    const cwdIdx = argv.indexOf("--cwd");
+    if (cwdIdx !== -1) {
+      if (!argv[cwdIdx + 1]) fail("--cwd needs a directory");
+      cwd = resolve(argv[cwdIdx + 1]);
+    }
 
-  if (cmd === "load") {
-    process.stdout.write(`${JSON.stringify(loadEffective(cwd), null, 2)}\n`);
-    return;
-  }
+    if (cmd === "load") {
+      process.stdout.write(`${JSON.stringify(loadEffective(cwd), null, 2)}\n`);
+      return;
+    }
 
-  if (cmd === "validate") {
-    const file = argv.find((a, i) => i > 0 && a !== "--cwd" && argv[i - 1] !== "--cwd");
-    if (!file) fail("validate needs a file path");
-    const parsed = parseConfigDocument(readFileSync(resolve(file), "utf8"), file);
-    if (!parsed.ok) fail(parsed.error);
-    process.stdout.write(`${JSON.stringify({ ok: true, path: resolve(file), lanes: Object.keys(parsed.document.lanes) }, null, 2)}\n`);
-    return;
-  }
+    if (cmd === "validate") {
+      const file = argv.find((a, i) => i > 0 && a !== "--cwd" && argv[i - 1] !== "--cwd");
+      if (!file) fail("validate needs a file path");
+      const parsed = parseConfigDocument(readFileSync(resolve(file), "utf8"), file);
+      if (!parsed.ok) fail(parsed.error);
+      process.stdout.write(`${JSON.stringify({ ok: true, path: resolve(file), lanes: Object.keys(parsed.document.lanes) }, null, 2)}\n`);
+      return;
+    }
 
-  if (cmd === "write") {
-    const scopeIdx = argv.indexOf("--scope");
-    const scope = scopeIdx !== -1 ? argv[scopeIdx + 1] : null;
-    if (scope !== "global" && scope !== "project") fail("--scope must be global or project");
-    const file = argv.filter((a, i) => {
-      if (a.startsWith("--")) return false;
-      if (i > 0 && (argv[i - 1] === "--cwd" || argv[i - 1] === "--scope")) return false;
-      return i > 0;
-    }).at(-1);
-    if (!file) fail("write needs a JSON file path");
-    const target =
-      scope === "global" ? globalConfigPath() : projectConfigPath(cwd);
-    if (!target) fail("project scope requires a git repository (--cwd)");
-    const parsed = parseConfigDocument(readFileSync(resolve(file), "utf8"), file);
-    if (!parsed.ok) fail(parsed.error);
-    writeAtomic(target, parsed.document);
-    process.stdout.write(`${JSON.stringify({ ok: true, path: target, lanes: Object.keys(parsed.document.lanes) }, null, 2)}\n`);
-    return;
-  }
+    if (cmd === "write") {
+      const scopeIdx = argv.indexOf("--scope");
+      const scope = scopeIdx !== -1 ? argv[scopeIdx + 1] : null;
+      if (scope !== "global" && scope !== "project") fail("--scope must be global or project");
+      const file = argv.filter((a, i) => {
+        if (a.startsWith("--")) return false;
+        if (i > 0 && (argv[i - 1] === "--cwd" || argv[i - 1] === "--scope")) return false;
+        return i > 0;
+      }).at(-1);
+      if (!file) fail("write needs a JSON file path");
+      const target =
+        scope === "global" ? globalConfigPath() : projectConfigPath(cwd);
+      if (!target) fail("project scope requires a git repository (--cwd)");
+      const parsed = parseConfigDocument(readFileSync(resolve(file), "utf8"), file);
+      if (!parsed.ok) fail(parsed.error);
+      writeAtomic(target, parsed.document);
+      process.stdout.write(`${JSON.stringify({ ok: true, path: target, lanes: Object.keys(parsed.document.lanes) }, null, 2)}\n`);
+      return;
+    }
 
-  fail(`unknown command ${JSON.stringify(cmd)}. Use --help.`);
+    fail(`unknown command ${JSON.stringify(cmd)}. Use --help.`);
+  } catch (error) {
+    fail(error.message || String(error));
+  }
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

@@ -1598,104 +1598,106 @@ if (WIN) {
   process.env.USERPROFILE = cfgHome;
   delete process.env.XDG_CONFIG_HOME;
 
-  const good = {
-    version: "delegate-fleet.v1",
-    lanes: {
-      feature: { implementer: "opencode", model: "grok", variant: "high" },
-      tests: { implementer: "grok", effort: "medium" },
-    },
-  };
-  const goodFile = join(cfgRepo, "lanes.json");
-  writeFileSync(goodFile, `${JSON.stringify(good, null, 2)}\n`);
-
-  const validate = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", goodFile], {
-    encoding: "utf8",
-    env: process.env,
-  });
-  check("config validate accepts a good map", validate.status === 0);
-
-  const badEffort = {
-    version: "delegate-fleet.v1",
-    lanes: { feature: { implementer: "opencode", model: "grok", effort: "high" } },
-  };
-  const badFile = join(cfgRepo, "bad.json");
-  writeFileSync(badFile, `${JSON.stringify(badEffort)}\n`);
-  const rejectEffort = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", badFile], {
-    encoding: "utf8",
-    env: process.env,
-  });
-  check("config validate rejects effort on opencode", rejectEffort.status === 2);
-
-  const writeGlobal = spawnSync(
-    process.execPath,
-    [join(setupDir, "config.mjs"), "write", "--scope", "global", goodFile],
-    { encoding: "utf8", env: process.env },
-  );
-  check("config write --scope global", writeGlobal.status === 0);
-  const globalPath = join(cfgHome, ".config", "delegate-skills", "config.json");
-  check("global config file created", existsSync(globalPath));
-
-  const projectOnly = {
-    version: "delegate-fleet.v1",
-    lanes: {
-      feature: { implementer: "claude", effort: "high" },
-    },
-  };
-  const projectFile = join(cfgRepo, "project-lanes.json");
-  writeFileSync(projectFile, `${JSON.stringify(projectOnly, null, 2)}\n`);
-  const writeProject = spawnSync(
-    process.execPath,
-    [join(setupDir, "config.mjs"), "write", "--scope", "project", "--cwd", cfgRepo, projectFile],
-    { encoding: "utf8", env: process.env },
-  );
-  check("config write --scope project", writeProject.status === 0);
-  check("project config file created", existsSync(join(cfgRepo, ".delegate", "config.json")));
-
-  const load = spawnSync(
-    process.execPath,
-    [join(setupDir, "config.mjs"), "load", "--cwd", cfgRepo],
-    { encoding: "utf8", env: process.env },
-  );
-  check("config load exits 0", load.status === 0);
-  let effective = null;
   try {
-    effective = JSON.parse(load.stdout);
-  } catch {
-    effective = null;
-  }
-  check(
-    "effective feature lane is project (whole-lane replace)",
-    effective?.lanes?.feature?.implementer === "claude" &&
-      effective?.lanes?.feature?.source === "project" &&
-      effective?.lanes?.feature?.effort === "high",
-  );
-  check(
-    "effective tests lane falls through to global",
-    effective?.lanes?.tests?.implementer === "grok" && effective?.lanes?.tests?.source === "global",
-  );
+    const good = {
+      version: "delegate-fleet.v1",
+      lanes: {
+        feature: { implementer: "opencode", model: "grok", variant: "high" },
+        tests: { implementer: "grok", effort: "medium" },
+      },
+    };
+    const goodFile = join(cfgRepo, "lanes.json");
+    writeFileSync(goodFile, `${JSON.stringify(good, null, 2)}\n`);
 
-  // Outside a project: load with cwd = non-git dir still sees global.
-  const loadBare = spawnSync(
-    process.execPath,
-    [join(setupDir, "config.mjs"), "load", "--cwd", bare],
-    { encoding: "utf8", env: process.env },
-  );
-  let bareEff = null;
-  try {
-    bareEff = JSON.parse(loadBare.stdout);
-  } catch {
-    bareEff = null;
-  }
-  check("load outside git uses global only", loadBare.status === 0 && bareEff?.lanes?.feature?.source === "global");
-  check("load outside git does not invent .delegate", !existsSync(join(bare, ".delegate")));
+    const validate = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", goodFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    check("config validate accepts a good map", validate.status === 0);
 
-  if (prevHome === undefined) delete process.env.HOME;
-  else process.env.HOME = prevHome;
-  if (prevUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = prevUserProfile;
-  if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-  else process.env.XDG_CONFIG_HOME = prevXdg;
-  rmSync(fleetRoot, { recursive: true, force: true });
+    const badEffort = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "opencode", model: "grok", effort: "high" } },
+    };
+    const badFile = join(cfgRepo, "bad.json");
+    writeFileSync(badFile, `${JSON.stringify(badEffort)}\n`);
+    const rejectEffort = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", badFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    check("config validate rejects effort on opencode", rejectEffort.status === 2);
+
+    const writeGlobal = spawnSync(
+      process.execPath,
+      [join(setupDir, "config.mjs"), "write", "--scope", "global", goodFile],
+      { encoding: "utf8", env: process.env },
+    );
+    check("config write --scope global", writeGlobal.status === 0);
+    const globalPath = join(cfgHome, ".config", "delegate-skills", "config.json");
+    check("global config file created", existsSync(globalPath));
+
+    const projectOnly = {
+      version: "delegate-fleet.v1",
+      lanes: {
+        feature: { implementer: "claude", effort: "high" },
+      },
+    };
+    const projectFile = join(cfgRepo, "project-lanes.json");
+    writeFileSync(projectFile, `${JSON.stringify(projectOnly, null, 2)}\n`);
+    const writeProject = spawnSync(
+      process.execPath,
+      [join(setupDir, "config.mjs"), "write", "--scope", "project", "--cwd", cfgRepo, projectFile],
+      { encoding: "utf8", env: process.env },
+    );
+    check("config write --scope project", writeProject.status === 0);
+    check("project config file created", existsSync(join(cfgRepo, ".delegate", "config.json")));
+
+    const load = spawnSync(
+      process.execPath,
+      [join(setupDir, "config.mjs"), "load", "--cwd", cfgRepo],
+      { encoding: "utf8", env: process.env },
+    );
+    check("config load exits 0", load.status === 0);
+    let effective = null;
+    try {
+      effective = JSON.parse(load.stdout);
+    } catch {
+      effective = null;
+    }
+    check(
+      "effective feature lane is project (whole-lane replace)",
+      effective?.lanes?.feature?.implementer === "claude" &&
+        effective?.lanes?.feature?.source === "project" &&
+        effective?.lanes?.feature?.effort === "high",
+    );
+    check(
+      "effective tests lane falls through to global",
+      effective?.lanes?.tests?.implementer === "grok" && effective?.lanes?.tests?.source === "global",
+    );
+
+    // Outside a project: load with cwd = non-git dir still sees global.
+    const loadBare = spawnSync(
+      process.execPath,
+      [join(setupDir, "config.mjs"), "load", "--cwd", bare],
+      { encoding: "utf8", env: process.env },
+    );
+    let bareEff = null;
+    try {
+      bareEff = JSON.parse(loadBare.stdout);
+    } catch {
+      bareEff = null;
+    }
+    check("load outside git uses global only", loadBare.status === 0 && bareEff?.lanes?.feature?.source === "global");
+    check("load outside git does not invent .delegate", !existsSync(join(bare, ".delegate")));
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
+    if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prevXdg;
+    rmSync(fleetRoot, { recursive: true, force: true });
+  }
 }
 
 rmSync(scratch, { recursive: true, force: true });

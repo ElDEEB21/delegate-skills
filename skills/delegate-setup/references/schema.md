@@ -34,7 +34,7 @@ One concept: **lanes**. A lane names an implementer and optional dials.
 
 | Scope | Path |
 | --- | --- |
-| Global | `~/.config/delegate-skills/config.json` |
+| Global | `$XDG_CONFIG_HOME/delegate-skills/config.json` when `XDG_CONFIG_HOME` is set; otherwise `~/.config/delegate-skills/config.json` (`os.homedir()` → `HOME` / `USERPROFILE`) |
 | Project | `<git-root>/.delegate/config.json` |
 
 Project overlays global by **whole-lane replace** (same lane name in project fully replaces the global lane).
