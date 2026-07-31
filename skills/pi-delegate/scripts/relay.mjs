@@ -87,6 +87,7 @@ import {
 import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
+import { makeEventScanner } from "../../../lib/event-scanner.mjs";
 
 const DEFAULT_TIMEOUT = "30m";
 const VERSION_TIMEOUT_MS = 10_000;
@@ -295,52 +296,6 @@ function buildArgv(opts) {
   argv.push(opts.approve ? "--approve" : "--no-approve");
   if (opts.readOnly) argv.push("--tools", READ_ONLY_TOOLS);
   return argv;
-}
-
-function makeEventScanner(onObject) {
-  // pi documents --mode json as newline-delimited JSON. This brace-aware
-  // scanner also tolerates chunk-split and concatenated objects plus non-JSON
-  // progress text without depending on documented event boundaries.
-  let buffer = "";
-  let cursor = 0;
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-  return (chunk) => {
-    buffer += chunk;
-    for (; cursor < buffer.length; cursor += 1) {
-      const char = buffer[cursor];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === '"') inString = false;
-        continue;
-      }
-      if (char === '"') {
-        if (depth > 0) inString = true;
-      } else if (char === "{") {
-        if (depth === 0) start = cursor;
-        depth += 1;
-      } else if (char === "}" && depth > 0) {
-        depth -= 1;
-        if (depth === 0 && start !== -1) {
-          const slice = buffer.slice(start, cursor + 1);
-          try { onObject(JSON.parse(slice)); } catch { /* ignore non-event text */ }
-          buffer = buffer.slice(cursor + 1);
-          cursor = -1;
-          start = -1;
-        }
-      }
-    }
-    if (depth === 0) {
-      buffer = "";
-      cursor = 0;
-      start = -1;
-      inString = false;
-      escaped = false;
-    }
-  };
 }
 
 function prepareRunDir(opts, brief) {

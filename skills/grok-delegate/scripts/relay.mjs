@@ -81,6 +81,7 @@ import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync, appendF
 import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
+import { makeEventScanner } from "../../../lib/event-scanner.mjs";
 
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_483_647;
@@ -336,48 +337,6 @@ function buildArgv(opts, run) {
   // "-" can't be misread as a flag. prepareRunDir already wrote run.briefPath.
   argv.push("--prompt-file", quotePath(run.briefPath));
   return argv;
-}
-
-function makeEventScanner(onObject) {
-  // streaming-json is documented as newline-delimited JSON, but be defensive:
-  // brace-aware scan (same approach as opencode-delegate) tolerates junk prefixes
-  // and concatenated objects if the format drifts.
-  let buf = "";
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-  return (chunk) => {
-    buf += chunk;
-    for (let i = 0; i < buf.length; i += 1) {
-      const ch = buf[i];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (ch === "\\") escaped = true;
-        else if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') { if (depth > 0) inString = true; continue; }
-      if (ch === "{") {
-        if (depth === 0) start = i;
-        depth += 1;
-      } else if (ch === "}") {
-        if (depth > 0) {
-          depth -= 1;
-          if (depth === 0 && start !== -1) {
-            const slice = buf.slice(start, i + 1);
-            try { onObject(JSON.parse(slice)); } catch { /* ignore non-objects */ }
-            start = -1;
-          }
-        }
-      }
-    }
-    buf = depth > 0 && start !== -1 ? buf.slice(start) : "";
-    start = -1;
-    depth = 0;
-    inString = false;
-    escaped = false;
-  };
 }
 
 function extractSessionId(event) {

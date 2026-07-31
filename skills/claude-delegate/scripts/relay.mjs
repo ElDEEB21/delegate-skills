@@ -104,6 +104,7 @@ import {
 import { basename, delimiter, join, resolve } from "node:path";
 import { constants as osConstants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
+import { makeEventScanner } from "../../../lib/event-scanner.mjs";
 
 const SCHEMA = "delegate-relay.result.v1";
 const MAX_BRIEF_BYTES = 10_000_000;
@@ -475,69 +476,6 @@ function buildArgv(opts, run) {
   if (opts.maxTurns) argv.push("--max-turns", opts.maxTurns);
   if (opts.maxBudgetUsd) argv.push("--max-budget-usd", opts.maxBudgetUsd);
   return argv;
-}
-
-function makeEventScanner(onObject) {
-  // Claude documents NDJSON. A brace-aware scanner also tolerates a junk prefix,
-  // concatenated objects, and arbitrary chunk boundaries while respecting JSON
-  // strings and escapes.
-  let buffer = "";
-  let index = 0;
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-
-  return (text) => {
-    if (!text) return;
-    buffer += text;
-    while (index < buffer.length) {
-      const ch = buffer[index];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (ch === "\\") escaped = true;
-        else if (ch === '"') inString = false;
-        index += 1;
-        continue;
-      }
-      if (ch === '"') {
-        if (depth > 0) inString = true;
-        index += 1;
-        continue;
-      }
-      if (ch === "{") {
-        if (depth === 0) start = index;
-        depth += 1;
-      } else if (ch === "}" && depth > 0) {
-        depth -= 1;
-        if (depth === 0 && start !== -1) {
-          const candidate = buffer.slice(start, index + 1);
-          try {
-            onObject(JSON.parse(candidate));
-          } catch {
-            // Preserve malformed output in events.jsonl, but do not trust it.
-          }
-          buffer = buffer.slice(index + 1);
-          index = 0;
-          start = -1;
-          inString = false;
-          escaped = false;
-          continue;
-        }
-      }
-      index += 1;
-    }
-
-    if (depth === 0) {
-      buffer = "";
-      index = 0;
-      start = -1;
-    } else if (start > 0) {
-      buffer = buffer.slice(start);
-      index -= start;
-      start = 0;
-    }
-  };
 }
 
 function eventSessionId(event) {

@@ -74,6 +74,7 @@ import { mkdirSync, writeFileSync, renameSync, rmSync, readFileSync, existsSync,
 import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
+import { makeEventScanner } from "../../../lib/event-scanner.mjs";
 
 const DEFAULT_TIMEOUT = "30m";
 const MAX_TIMER_MS = 2_147_483_647;
@@ -274,47 +275,6 @@ function buildArgv(opts) {
   else if (opts.resumeLast) argv.push("--continue");
   for (const dir of opts.addDirs) argv.push("--add-dir", winq(dir));
   return argv;
-}
-
-function makeEventScanner(onObject) {
-  // stream-json is newline-delimited JSON, but this brace-aware scan also
-  // tolerates junk prefixes and concatenated objects if the format drifts.
-  let buf = "";
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-  return (chunk) => {
-    buf += chunk;
-    for (let i = 0; i < buf.length; i += 1) {
-      const ch = buf[i];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (ch === "\\") escaped = true;
-        else if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') { if (depth > 0) inString = true; continue; }
-      if (ch === "{") {
-        if (depth === 0) start = i;
-        depth += 1;
-      } else if (ch === "}") {
-        if (depth > 0) {
-          depth -= 1;
-          if (depth === 0 && start !== -1) {
-            const slice = buf.slice(start, i + 1);
-            try { onObject(JSON.parse(slice)); } catch { /* ignore non-objects */ }
-            start = -1;
-          }
-        }
-      }
-    }
-    buf = depth > 0 && start !== -1 ? buf.slice(start) : "";
-    start = -1;
-    depth = 0;
-    inString = false;
-    escaped = false;
-  };
 }
 
 function prepareRunDir(opts, brief) {

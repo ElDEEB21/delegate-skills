@@ -62,7 +62,9 @@ the skill's `relay.mjs`.
   `skills/kimi-delegate/`, `skills/qoder-delegate/`, `skills/vibe-delegate/`, and
   `skills/cursor-delegate/`, and `skills/pi-delegate/` — each Node built-ins only, no dependencies,
   no network calls of its own, no credentials, no telemetry. New scripts must hold the same line,
-  and the README's trust section must stay accurate.
+  and the README's trust section must stay accurate. `lib/event-scanner.mjs` holds the shared
+  stream-parsing helpers (`makeEventScanner`, `makeLineScanner`) that most relays import; keep it
+  Node built-ins only and change it only if every importing relay is updated in the same commit.
 
 ## Before publishing a change
 

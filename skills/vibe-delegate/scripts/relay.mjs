@@ -84,6 +84,7 @@ import {
 import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
+import { makeLineScanner } from "../../../lib/event-scanner.mjs";
 
 const DEFAULT_TIMEOUT = "30m";
 const MAX_TIMER_MS = 2_147_483_647;
@@ -316,22 +317,6 @@ function buildArgv(opts, brief) {
   // form binds a brief that starts with "-" instead of letting it parse as a flag.
   argv.push(`--prompt=${brief}`);
   return argv;
-}
-
-function makeLineScanner(onObject) {
-  // Vibe's --output streaming emits newline-delimited JSON: one JSON object per
-  // line. Parse line by line; skip blank lines and non-JSON gracefully.
-  let buf = "";
-  return (chunk) => {
-    buf += chunk;
-    const lines = buf.split("\n");
-    buf = lines.pop() ?? "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try { onObject(JSON.parse(trimmed)); } catch { /* skip non-JSON lines */ }
-    }
-  };
 }
 
 function extractFromEvent(obj, textChunks) {

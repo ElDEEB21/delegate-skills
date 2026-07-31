@@ -52,6 +52,7 @@ import {
 import { constants, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { makeEventScanner } from "../../../lib/event-scanner.mjs";
 
 const DEFAULT_TIMEOUT = "30m";
 const MAX_TIMER_MS = 2_147_483_647;
@@ -235,53 +236,6 @@ function buildArgv(opts, brief) {
   for (const dir of opts.addDirs) argv.push("--add-dir", dir);
   argv.push("-p", brief);
   return argv;
-}
-
-function makeEventScanner(onObject) {
-  // Qoder documents stream-json as newline-delimited JSON. This brace-aware
-  // scanner also tolerates chunk-split and concatenated objects plus non-JSON
-  // progress text without depending on undocumented event boundaries.
-  let buffer = "";
-  let cursor = 0;
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-
-  return (chunk) => {
-    buffer += chunk;
-    for (; cursor < buffer.length; cursor += 1) {
-      const char = buffer[cursor];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === '"') inString = false;
-        continue;
-      }
-      if (char === '"') {
-        if (depth > 0) inString = true;
-      } else if (char === "{") {
-        if (depth === 0) start = cursor;
-        depth += 1;
-      } else if (char === "}" && depth > 0) {
-        depth -= 1;
-        if (depth === 0 && start !== -1) {
-          const slice = buffer.slice(start, cursor + 1);
-          try { onObject(JSON.parse(slice)); } catch { /* Ignore non-event text. */ }
-          buffer = buffer.slice(cursor + 1);
-          cursor = -1;
-          start = -1;
-        }
-      }
-    }
-    if (depth === 0) {
-      buffer = "";
-      cursor = 0;
-      start = -1;
-      inString = false;
-      escaped = false;
-    }
-  };
 }
 
 function prepareRunDir(opts, brief) {
