@@ -63,6 +63,10 @@ the skill's `relay.mjs`.
   Provenance, status caveats, and how-it-works detail go in the body or here, never in the description.
   Keep `description` **under 1024 characters** — some orchestrators (e.g. ZCode) hard-cap it and reject
   the skill otherwise.
+- **Package versioning:** release with an annotated git tag `vMAJOR.MINOR.PATCH` on `master`. Bump
+  every skill's `metadata.version` to the same semver in that release (informational only — installers
+  pin via `@v…`, not frontmatter). Wire/schema ids (`delegate-fleet.v1`, `delegate-relay.result.v1`)
+  are separate; bump those only when the JSON contract breaks.
 - **Progressive disclosure:** keep `SKILL.md` lean; push depth into `references/*.md` that load only
   when needed.
 - **Executables:** keep them minimal and inspectable. Each `*-delegate` skill has one

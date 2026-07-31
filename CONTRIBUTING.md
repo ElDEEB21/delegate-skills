@@ -55,6 +55,18 @@ Utility checklist (instead of the four-references + `relay.mjs` bar above):
 
 Do not invent a second utility that duplicates lane setup. Extend `delegate-setup` instead.
 
+## Releases
+
+Install pinning uses **git tags**, not `metadata.version` alone:
+
+1. Land the release on `master`.
+2. Set every skill's `metadata.version` to the release semver (e.g. `0.2.0`).
+3. Create an annotated tag: `git tag -a v0.2.0 -m "v0.2.0"` and `git push origin v0.2.0`.
+4. Users install with `npx skills add amElnagdy/delegate-skills@v0.2.0`.
+
+Bump the tag for user-visible skill or relay contract changes. Docs-only or smoke-only may be a
+patch. Schema ids (`delegate-fleet.v1`, …) bump independently when the JSON shape breaks.
+
 ## Everything else
 
 Fixes to a relay, a reference, or the README need no claim. Keep the diff to one concern, run
