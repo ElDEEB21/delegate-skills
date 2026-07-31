@@ -72,7 +72,7 @@ npx skills add amElnagdy/delegate-skills
 npx skills add amElnagdy/delegate-skills --skill codex-delegate
 ```
 
-Pin a release (git tag). The Skills CLI versions installs by git ref, not by
+Pin a release (git tag). The Skills CLI installs by git ref, not by
 `metadata.version` in `SKILL.md`:
 
 ```bash
@@ -202,8 +202,8 @@ Per skill — platform, CLI version, and what the run exercised:
   cleanup. No end-to-end run is recorded here.
 - `delegate-setup` — contract-tested: discover JSON shape, config validate/write/load, whole-lane
   project overlay, global write without creating `.delegate/`, and `--lane` resolve / wrong-skill /
-  flag-override against relays. Live discover against installed CLIs runs in smoke (versions vary by
-  machine). Native Windows discover smoke not yet claimed.
+  flag-override against relays. The smoke suite runs live discovery against installed CLIs
+  (versions vary by machine). Native Windows discover smoke not yet claimed.
 
 Not yet verified: native Windows launches for `agy`, `claude`, `grok`, `kimi`, `pi`, `qoder`, and
 `vibe` (the `codex`/`opencode`/`grok` `.cmd` shim handling is in place and quoted; Cursor serializes a

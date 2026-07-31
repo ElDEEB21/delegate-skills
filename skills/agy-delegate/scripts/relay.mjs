@@ -166,7 +166,7 @@ function parseArgs(argv) {
       case "--new-project": opts.newProject = true; break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--conversation": opts.conversation = next(); break;
-      case "--sandbox": opts.sandbox = true; break;
+      case "--sandbox": opts.sandbox = true; flagged.add("sandbox"); break;
       case "--dangerously-skip-permissions": opts.dangerouslySkipPermissions = true; break;
       case "--print-timeout": opts.printTimeout = next(); break;
       case "--timeout": opts.timeout = next(); flagged.add("timeout"); break;

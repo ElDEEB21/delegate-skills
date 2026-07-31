@@ -123,8 +123,18 @@ function applyFleetLane(opts, flagged) {
     if (field === "agent" && (flagged.has("agent") || flagged.has("readOnly"))) continue;
     if (field === "sandbox" && (flagged.has("sandbox") || flagged.has("readOnly"))) continue;
     if (field === "permissionMode" && (flagged.has("permissionMode") || flagged.has("readOnly"))) continue;
-    if (field === "planOnly" && (flagged.has("planOnly") || flagged.has("readOnly"))) continue;
-    if (field === "readOnly" && flagged.has("readOnly")) continue;
+    if (
+      field === "planOnly" &&
+      (flagged.has("planOnly") || flagged.has("readOnly") || flagged.has("fullAccess"))
+    ) {
+      continue;
+    }
+    if (
+      field === "readOnly" &&
+      (flagged.has("readOnly") || flagged.has("fullAccess"))
+    ) {
+      continue;
+    }
     if (field === "force" && flagged.has("force")) continue;
     opts[field] = value;
   }
@@ -201,7 +211,12 @@ function parseArgs(argv) {
       case "--session": opts.session = next(); break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--plan-only": opts.planOnly = true; flagged.add("planOnly"); flagged.add("readOnly"); break;
-      case "--full-access": opts.fullAccess = true; break;
+      case "--full-access":
+        opts.fullAccess = true;
+        flagged.add("fullAccess");
+        flagged.add("planOnly");
+        flagged.add("readOnly");
+        break;
       case "--enabled-tools": opts.enabledTools.push(next()); break;
       case "--disabled-tools": opts.disabledTools.push(next()); break;
       case "--timeout": opts.timeout = next(); flagged.add("timeout"); break;

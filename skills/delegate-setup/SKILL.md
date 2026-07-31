@@ -76,7 +76,7 @@ Show:
 
 | Lane | Implementer | Model | Effort / variant | Source (if updating) |
 | --- | --- | --- | --- | --- |
-| feature | opencode | grok | variant: high | — |
+| feature | opencode | opencode/grok | variant: high | — |
 
 Then the **complete** JSON (`version`: `delegate-fleet.v1`). One line of why per lane; flag auth or
 model uncertainty.
