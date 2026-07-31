@@ -71,6 +71,7 @@ import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_TIMEOUT = "30m";
+const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_483_647;
 
 function fail(message, code = 2) {
@@ -173,15 +174,28 @@ function killChild(child, signal = "SIGTERM") {
   }
 }
 
-function kimiVersion() {
+function versionProbeTimeout(opts) {
+  // The watchdog is only armed once kimi is running, so the preflight needs a bound of its
+  // own: a `kimi --version` that never returns would wedge the relay here, before any
+  // result.json exists, and --timeout could not reach it.
+  return Math.min(parseDuration(opts.timeout), VERSION_PROBE_TIMEOUT_MS);
+}
+
+function kimiVersion(probeTimeoutMs) {
   try {
-    const out = execFileSync("kimi", ["--version"], { encoding: "utf8" }).trim();
-    return out || "unknown";
+    const out = execFileSync("kimi", ["--version"], {
+      encoding: "utf8",
+      timeout: probeTimeoutMs,
+      killSignal: "SIGKILL",
+    }).trim();
+    return { version: out || "unknown", error: null };
   } catch (err) {
     // Only a missing binary means "unavailable"; any other version-probe
     // failure must not masquerade as exit 127.
-    if (err && err.code === "ENOENT") return null;
-    return "unknown";
+    if (err && err.code === "ENOENT") return { version: null, error: null };
+    // A hung probe we killed, or a real non-zero exit, means kimi is installed but not
+    // usable. Dispatching anyway would send the brief to a CLI already known to be broken.
+    return { version: null, error: err };
   }
 }
 
@@ -327,6 +341,28 @@ function reportUnavailable(writeResult, resultPath) {
   printSummary(result, resultPath);
   process.stderr.write("relay: `kimi` not found on PATH. Install Kimi Code and run `kimi login`.\n");
   process.exit(127);
+}
+
+function reportVersionFailure(opts, writeResult, run, error, probeTimeoutMs) {
+  const timedOut = error?.code === "ETIMEDOUT";
+  const stderr = String(error?.stderr || "").trim();
+  if (stderr) writeFileSync(run.stderrPath, `${stderr}\n`, "utf8");
+  const message = timedOut
+    ? `kimi --version preflight timed out after ${probeTimeoutMs}ms; Kimi was not dispatched`
+    : `kimi --version preflight failed${Number.isInteger(error?.status) ? ` with exit ${error.status}` : ""}; Kimi was not dispatched`;
+  const result = writeResult({
+    status: timedOut ? "timeout" : "failed",
+    exitCode: timedOut ? 124 : Number.isInteger(error?.status) ? error.status : 1,
+    signal: null,
+    sessionId: null,
+    finalMessage: "",
+    touchedFiles: gitTouchedFiles(opts.cd),
+    stderrTail: stderr ? stderr.split("\n").slice(-20) : [],
+    error: message,
+  });
+  printSummary(result, run.resultPath);
+  process.stderr.write(`relay: ${message}\n`);
+  process.exit(result.exitCode);
 }
 
 function dispatchToKimi(opts, brief, run, writeResult) {
@@ -485,11 +521,18 @@ function main() {
     fail(`brief is ${Math.round(briefBytes / 1024)}KB; kimi passes the prompt as a CLI argument, which the OS caps (~128KB on Linux). Trim it, or have kimi read large context from the workspace instead of inlining it.`);
   }
 
-  const version = kimiVersion();
+  // Prepare the run dir before probing, so a preflight that times out or fails still has
+  // somewhere to publish result.json rather than exiting silently.
   const run = prepareRunDir(opts, brief);
-  const writeResult = makeResultWriter(opts, version, run);
-  if (!version) {
+  const probeTimeoutMs = versionProbeTimeout(opts);
+  const probe = kimiVersion(probeTimeoutMs);
+  const writeResult = makeResultWriter(opts, probe.version, run);
+  if (!probe.version && !probe.error) {
     reportUnavailable(writeResult, run.resultPath);
+    return;
+  }
+  if (probe.error) {
+    reportVersionFailure(opts, writeResult, run, probe.error, probeTimeoutMs);
     return;
   }
   dispatchToKimi(opts, brief, run, writeResult);

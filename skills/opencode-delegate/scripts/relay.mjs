@@ -72,6 +72,7 @@ import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
+const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_483_647;
 
 function fail(message, code = 2) {
@@ -195,15 +196,39 @@ function readBrief(opts) {
   return stdin;
 }
 
-function opencodeVersion() {
+function versionProbeTimeout(opts) {
+  // The watchdog is only armed once opencode is running, so the preflight needs a bound of
+  // its own: an `opencode --version` that never returns would wedge the relay here, before
+  // any result.json exists, and --timeout could not reach it.
+  const timeoutMs = opts.timeout === null ? null : parseDuration(opts.timeout);
+  return timeoutMs === null ? VERSION_PROBE_TIMEOUT_MS : Math.min(timeoutMs, VERSION_PROBE_TIMEOUT_MS);
+}
+
+function opencodeVersion(probeTimeoutMs) {
   try {
     // On Windows, npm installs `opencode` as a .cmd shim; Node's CreateProcess only
     // auto-appends .exe, never .cmd, so launching it needs shell:true there or it
     // ENOENTs on a working install. POSIX is unaffected. (git installs a real
     // git.exe and must NOT get this flag — see gitTouchedFiles.)
-    return execFileSync("opencode", ["--version"], { encoding: "utf8", shell: process.platform === "win32" }).trim();
-  } catch {
-    return null;
+    const version = execFileSync("opencode", ["--version"], {
+      encoding: "utf8",
+      shell: process.platform === "win32",
+      timeout: probeTimeoutMs,
+      killSignal: "SIGKILL",
+    }).trim();
+    return { version: version || "unknown", error: null };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { version: null, error: null };
+    // shell:true routes a missing binary through cmd.exe, which reports it as a non-zero
+    // exit rather than ENOENT; that is still "not installed", not a broken install.
+    if (process.platform === "win32" &&
+        /not recognized as an internal or external command/i.test(String(error?.stderr || ""))) {
+      return { version: null, error: null };
+    }
+    // Anything else — a hung probe we killed, or a real non-zero exit — means opencode is
+    // installed but not usable. Reporting that as "unavailable" would send the caller
+    // off to reinstall a binary that is already there.
+    return { version: null, error };
   }
 }
 
@@ -362,6 +387,28 @@ function reportUnavailable(writeResult, resultPath) {
   printSummary(result, resultPath);
   process.stderr.write("relay: `opencode` not found on PATH. Install it (npm i -g opencode-ai) and run `opencode auth login`.\n");
   process.exit(127);
+}
+
+function reportVersionFailure(opts, writeResult, run, error, probeTimeoutMs) {
+  const timedOut = error?.code === "ETIMEDOUT";
+  const stderr = String(error?.stderr || "").trim();
+  const message = timedOut
+    ? `opencode --version preflight timed out after ${probeTimeoutMs}ms; OpenCode was not dispatched`
+    : `opencode --version preflight failed${Number.isInteger(error?.status) ? ` with exit ${error.status}` : ""}; OpenCode was not dispatched`;
+  const result = writeResult({
+    status: timedOut ? "timeout" : "failed",
+    exitCode: timedOut ? 124 : Number.isInteger(error?.status) ? error.status : 1,
+    signal: null,
+    sessionId: null,
+    finalMessage: "",
+    touchedFiles: gitTouchedFiles(opts.cd),
+    cost: null,
+    stderrTail: stderr ? stderr.split("\n").slice(-20) : [],
+    error: message,
+  });
+  printSummary(result, run.resultPath);
+  process.stderr.write(`relay: ${message}\n`);
+  process.exit(result.exitCode);
 }
 
 function dispatchToOpenCode(opts, brief, run, writeResult) {
@@ -550,12 +597,19 @@ function main() {
     fail("no model given: pass --model provider/model — opencode has no safe default (e.g. a plan you're subscribed to, like opencode-go/kimi-k2.7-code)");
   }
 
-  const version = opencodeVersion();
+  // Prepare the run dir before probing, so a preflight that times out or fails still has
+  // somewhere to publish result.json rather than exiting silently.
   const run = prepareRunDir(opts, brief);
-  const writeResult = makeResultWriter(opts, version, run);
+  const probeTimeoutMs = versionProbeTimeout(opts);
+  const probe = opencodeVersion(probeTimeoutMs);
+  const writeResult = makeResultWriter(opts, probe.version, run);
 
-  if (!version) {
+  if (!probe.version && !probe.error) {
     reportUnavailable(writeResult, run.resultPath);
+    return;
+  }
+  if (probe.error) {
+    reportVersionFailure(opts, writeResult, run, probe.error, probeTimeoutMs);
     return;
   }
 

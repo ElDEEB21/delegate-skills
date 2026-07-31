@@ -82,6 +82,7 @@ import { join, resolve, basename } from "node:path";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
+const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_483_647;
 const AUTONOMY_MODES = new Set(["workspace-write", "read-only", "full-access"]);
 
@@ -220,21 +221,51 @@ function readBrief(opts) {
   return stdin;
 }
 
-function grokVersion() {
-  try {
-    // On Windows, npm installs `grok` as a .cmd shim; Node's CreateProcess only
-    // auto-appends .exe, never .cmd, so launching it needs shell:true there or it
-    // ENOENTs on a working install. POSIX is unaffected. (git installs a real
-    // git.exe and must NOT get this flag — see gitTouchedFiles.)
-    // Prefer `grok version` (documented subcommand); fall back to `--version`.
+function versionProbeTimeout(opts) {
+  // The watchdog is only armed once grok is running, so the preflight needs a bound of its
+  // own: a version probe that never returns would wedge the relay here, before any
+  // result.json exists, and --timeout could not reach it.
+  const timeoutMs = opts.timeout === null ? null : parseDuration(opts.timeout);
+  return timeoutMs === null ? VERSION_PROBE_TIMEOUT_MS : Math.min(timeoutMs, VERSION_PROBE_TIMEOUT_MS);
+}
+
+function grokVersion(probeTimeoutMs) {
+  // On Windows, npm installs `grok` as a .cmd shim; Node's CreateProcess only
+  // auto-appends .exe, never .cmd, so launching it needs shell:true there or it
+  // ENOENTs on a working install. POSIX is unaffected. (git installs a real
+  // git.exe and must NOT get this flag — see gitTouchedFiles.)
+  const probe = (argv, timeout = probeTimeoutMs) => {
     try {
-      return execFileSync("grok", ["version"], { encoding: "utf8", shell: process.platform === "win32" }).trim();
-    } catch {
-      return execFileSync("grok", ["--version"], { encoding: "utf8", shell: process.platform === "win32" }).trim();
+      const version = execFileSync("grok", argv, {
+        encoding: "utf8",
+        shell: process.platform === "win32",
+        timeout,
+        killSignal: "SIGKILL",
+      }).trim();
+      return { version: version || "unknown", error: null };
+    } catch (error) {
+      if (error?.code === "ENOENT") return { version: null, error: null };
+      // shell:true routes a missing binary through cmd.exe, which reports it as a non-zero
+      // exit rather than ENOENT; that is still "not installed", not a broken install.
+      if (process.platform === "win32" &&
+          /not recognized as an internal or external command/i.test(String(error?.stderr || ""))) {
+        return { version: null, error: null };
+      }
+      // Anything else — a hung probe we killed, or a real non-zero exit — means grok is
+      // installed but not usable. Reporting that as "unavailable" would send the caller
+      // off to reinstall a binary that is already there.
+      return { version: null, error };
     }
-  } catch {
-    return null;
-  }
+  };
+  // Prefer `grok version` (documented subcommand); fall back to `--version` for builds that
+  // only answer the flag. A missing binary and a hung probe are both conclusive, though:
+  // retrying either would only spend the bound a second time.
+  const startedAt = performance.now();
+  const documented = probe(["version"]);
+  if (documented.version || !documented.error || documented.error.code === "ETIMEDOUT") return documented;
+  const remainingMs = Math.floor(probeTimeoutMs - (performance.now() - startedAt));
+  if (remainingMs <= 0) return { version: null, error: { code: "ETIMEDOUT" } };
+  return probe(["--version"], remainingMs);
 }
 
 function gitTouchedFiles(cwd) {
@@ -425,6 +456,28 @@ function reportUnavailable(writeResult, resultPath) {
   process.exit(127);
 }
 
+function reportVersionFailure(opts, writeResult, run, error, probeTimeoutMs) {
+  const timedOut = error?.code === "ETIMEDOUT";
+  const stderr = String(error?.stderr || "").trim();
+  const message = timedOut
+    ? `grok version preflight timed out after ${probeTimeoutMs}ms; Grok was not dispatched`
+    : `grok version preflight failed${Number.isInteger(error?.status) ? ` with exit ${error.status}` : ""}; Grok was not dispatched`;
+  const result = writeResult({
+    status: timedOut ? "timeout" : "failed",
+    exitCode: timedOut ? 124 : Number.isInteger(error?.status) ? error.status : 1,
+    signal: null,
+    sessionId: null,
+    finalMessage: "",
+    usage: null,
+    touchedFiles: gitTouchedFiles(opts.cd),
+    stderrTail: stderr ? stderr.split("\n").slice(-20) : [],
+    error: message,
+  });
+  printSummary(result, run.resultPath);
+  process.stderr.write(`relay: ${message}\n`);
+  process.exit(result.exitCode);
+}
+
 function dispatchToGrok(opts, run, writeResult) {
   // grok cannot be prevented from writing headlessly (the read-only sandbox and
   // plan mode are advisory), so a --read-only run snapshots the tree up front
@@ -600,12 +653,19 @@ function main() {
   const brief = readBrief(opts);
   if (!brief.trim()) fail("empty brief (pass --brief <file> or pipe the brief on stdin)");
 
-  const version = grokVersion();
+  // Prepare the run dir before probing, so a preflight that times out or fails still has
+  // somewhere to publish result.json rather than exiting silently.
   const run = prepareRunDir(opts, brief);
-  const writeResult = makeResultWriter(opts, version, run);
+  const probeTimeoutMs = versionProbeTimeout(opts);
+  const probe = grokVersion(probeTimeoutMs);
+  const writeResult = makeResultWriter(opts, probe.version, run);
 
-  if (!version) {
+  if (!probe.version && !probe.error) {
     reportUnavailable(writeResult, run.resultPath);
+    return;
+  }
+  if (probe.error) {
+    reportVersionFailure(opts, writeResult, run, probe.error, probeTimeoutMs);
     return;
   }
 
