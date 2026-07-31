@@ -91,10 +91,12 @@ Schema and dial table: [references/schema.md](references/schema.md).
 
 ### 5. Approve and write
 
-On explicit yes, write **only** the chosen path (validate first):
+On explicit yes, write **only** the chosen path (validate first). Build the payload from that
+scope’s raw file (or an empty `lanes` object if new) — not from the effective merged `load` view,
+or a project write will shadow global-only lanes and a global write will promote project-only ones.
 
 ```bash
-# Write the approved document (no "source" fields) to a temp file, then validate/write.
+# Write the approved document for ONE scope to a temp file, then validate/write.
 # Use a platform temp path (mktemp, $TMPDIR, %TEMP%, or Node os.tmpdir()) — not a hard-coded /tmp.
 LANES_JSON="$(mktemp "${TMPDIR:-/tmp}/lanes.XXXXXX.json")"   # or equivalent on Windows
 node "<skill-dir>/scripts/config.mjs" validate "$LANES_JSON"

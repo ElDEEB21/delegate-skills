@@ -146,7 +146,12 @@ function applyFleetLane(opts, flagged) {
     if (field === "sandbox" && (flagged.has("sandbox") || flagged.has("readOnly"))) continue;
     if (field === "permissionMode" && (flagged.has("permissionMode") || flagged.has("readOnly"))) continue;
     if (field === "planOnly" && (flagged.has("planOnly") || flagged.has("readOnly"))) continue;
-    if (field === "readOnly" && flagged.has("readOnly")) continue;
+    if (
+      field === "readOnly" &&
+      (flagged.has("readOnly") || flagged.has("dangerouslySkipPermissions"))
+    ) {
+      continue;
+    }
     if (field === "force" && flagged.has("force")) continue;
     opts[field] = value;
   }
@@ -219,7 +224,10 @@ function parseArgs(argv) {
       case "--resume-last": opts.resumeLast = true; break;
       case "--session": opts.session = next(); break;
       case "--read-only": opts.readOnly = true; flagged.add("readOnly"); break;
-      case "--dangerously-skip-permissions": opts.dangerouslySkipPermissions = true; break;
+      case "--dangerously-skip-permissions":
+        opts.dangerouslySkipPermissions = true;
+        flagged.add("dangerouslySkipPermissions");
+        break;
       default:
         fail(`unknown option: ${arg}`);
     }

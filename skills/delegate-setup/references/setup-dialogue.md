@@ -24,10 +24,15 @@ Never create `.delegate/config.json` merely because cwd is a git repo.
 
 ## Writing
 
-1. Build the JSON document (`version` + `lanes` only — strip any `source` fields from the effective view).
-2. Validate dials against [schema.md](schema.md) (or `config.mjs validate`).
-3. Show table + full JSON again after every tweak.
-4. On explicit approval, write via:
+1. Build the JSON document for **one scope only**. Start from that scope’s raw file
+   (`config.mjs` paths: global or project), or `{ "version": "delegate-fleet.v1", "lanes": {} }`
+   if it does not exist yet. Apply the approved edits there.
+2. Do **not** write the effective merged map (stripping `source` from `load`). That would copy
+   lanes across scopes: a project write would shadow global-only names, and a global write would
+   promote project-only lanes everywhere. `write` replaces the chosen file wholesale.
+3. Validate dials against [schema.md](schema.md) (or `config.mjs validate`).
+4. Show table + full JSON again after every tweak.
+5. On explicit approval, write via:
 
 ```bash
 # Write the approved JSON to a platform temp file first (mktemp / os.tmpdir() / %TEMP%), then:

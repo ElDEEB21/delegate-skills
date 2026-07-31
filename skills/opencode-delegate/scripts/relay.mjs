@@ -76,6 +76,9 @@ import { StringDecoder } from "node:string_decoder";
 
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_483_647;
+// model/variant reach cmd.exe on win32 (shell:true for the opencode.cmd shim).
+// Keep in lockstep with delegate-setup MODEL_TOKEN.shellSafe.
+const SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 const IMPLEMENTER_KEY = "opencode";
 
@@ -170,6 +173,12 @@ function parseArgs(argv) {
     }
   }
   applyFleetLane(opts, flagged);
+  if (opts.model !== null && !SAFE_TOKEN.test(opts.model)) {
+    fail("--model contains unsupported characters (allowed: letters, digits, . _ : / -)");
+  }
+  if (opts.variant !== null && !SAFE_TOKEN.test(opts.variant)) {
+    fail("--variant contains unsupported characters (allowed: letters, digits, . _ : / -)");
+  }
   // The watchdog is relay-only (the opencode launch has no timeout flag), so a malformed
   // --timeout must fail loudly here - a silent no-watchdog fallback would be wrong.
   if (opts.timeout !== null && parseDuration(opts.timeout) === null) {

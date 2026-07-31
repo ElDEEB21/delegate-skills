@@ -1701,6 +1701,28 @@ if (WIN) {
     );
     check("codex relay rejects shell-unsafe --model", unsafeCodexFlag.status === 2);
 
+    const badVariant = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "opencode", model: "opencode/grok", variant: "high & whoami" } },
+    };
+    const badVariantFile = join(cfgRepo, "bad-variant.json");
+    writeFileSync(badVariantFile, `${JSON.stringify(badVariant)}\n`);
+    const rejectVariant = spawnSync(
+      process.execPath,
+      [join(setupDir, "config.mjs"), "validate", badVariantFile],
+      { encoding: "utf8", env: process.env },
+    );
+    check(
+      "config validate rejects shell-unsafe opencode variant",
+      rejectVariant.status === 2 && /variant/.test(rejectVariant.stderr),
+    );
+    const unsafeVariantFlag = spawnSync(
+      process.execPath,
+      [relayPath("opencode"), "--brief", briefPath, "--model", "opencode/grok", "--variant", "high & whoami"],
+      { encoding: "utf8", env: baseEnv },
+    );
+    check("opencode relay rejects shell-unsafe --variant", unsafeVariantFlag.status === 2);
+
     const badEffort = {
       version: "delegate-fleet.v1",
       lanes: { feature: { implementer: "opencode", model: "opencode/grok", effort: "high" } },
@@ -1818,6 +1840,53 @@ if (WIN) {
     // baseEnv snapped process.env before this block cleared XDG_CONFIG_HOME — drop it again.
     const fleetEnv = { ...baseEnv, HOME: cfgHome, USERPROFILE: cfgHome };
     delete fleetEnv.XDG_CONFIG_HOME;
+
+    // Explicit Claude full-access must win over a readOnly lane (flags win).
+    const claudeRoLane = {
+      version: "delegate-fleet.v1",
+      lanes: { review: { implementer: "claude", readOnly: true } },
+    };
+    const claudeRoFile = join(cfgRepo, "claude-readonly.json");
+    writeFileSync(claudeRoFile, `${JSON.stringify(claudeRoLane)}\n`);
+    spawnSync(process.execPath, [join(setupDir, "config.mjs"), "write", "--scope", "global", claudeRoFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    const claudeDspOut = join(cfgRepo, "out-claude-dsp");
+    mkdirSync(claudeDspOut, { recursive: true });
+    const claudeDspBrief = join(cfgRepo, "claude-dsp-brief.txt");
+    writeFileSync(claudeDspBrief, "claude dsp override smoke\n");
+    const claudeDsp = spawnSync(
+      process.execPath,
+      [
+        relayPath("claude"),
+        "--brief", claudeDspBrief,
+        "--cd", cfgRepo,
+        "--out-dir", claudeDspOut,
+        "--lane", "review",
+        "--dangerously-skip-permissions",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...fleetEnv,
+          SMOKE_MODE: "claude-success",
+          SMOKE_CAPTURE_FILE: join(cfgRepo, "claude-dsp-capture.json"),
+        },
+      },
+    );
+    check(
+      "relay --lane: Claude --dangerously-skip-permissions wins over readOnly lane",
+      claudeDsp.status === 0 &&
+        existsSync(join(claudeDspOut, "result.json")) &&
+        result(claudeDspOut).dangerouslySkipPermissions === true &&
+        result(claudeDspOut).readOnly === false,
+    );
+    spawnSync(process.execPath, [join(setupDir, "config.mjs"), "write", "--scope", "global", goodFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+
     const laneDispatch = spawnSync(
       process.execPath,
       [

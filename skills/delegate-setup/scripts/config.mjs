@@ -223,6 +223,13 @@ function validateDialValue(implementer, field, value, laneName, label) {
   if (field === "permissionMode" && implementer === "qoder" && !QODER_PERMISSION.includes(value)) {
     return `${label}: lane ${laneName}.permissionMode must be one of: ${QODER_PERMISSION.join(", ")}`;
   }
+  if (field === "variant") {
+    // OpenCode appends --variant on win32 shell:true; reject cmd metacharacters.
+    if (!MODEL_TOKEN.shellSafe.test(value)) {
+      return `${label}: lane ${laneName}.variant has unsupported characters (allowed: letters, digits, . _ : / -)`;
+    }
+    return null;
+  }
   if (field === "model" || field === "provider") {
     const modelError = validateModelOrProvider(implementer, field, value, laneName, label);
     if (modelError) return modelError;

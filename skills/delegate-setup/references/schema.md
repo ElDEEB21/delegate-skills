@@ -60,8 +60,8 @@ OpenCode lanes **require** `model` in `provider/model` form (a bare name is reje
 Boolean dials: `readOnly`, `force`. All other dials are non-empty strings. Duration strings for
 `timeout` use `h`/`m`/`s` (e.g. `30m`) and must fit the relay watchdog ceiling (~24.8 days).
 Do not combine `readOnly: true` with a write-capable `sandbox` / `permissionMode` / `force`.
-`model` / `provider` must match the bound relay’s token rules (e.g. Claude rejects spaces;
-Grok/Pi/OpenCode use a shell-safe token set).
+`model` / `provider` / OpenCode `variant` must match the bound relay’s token rules (e.g. Claude
+rejects spaces; Grok/Pi/OpenCode/Codex use a shell-safe token set on Windows `shell:true` launches).
 
 ## Helpers
 

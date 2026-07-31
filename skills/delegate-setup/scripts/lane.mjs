@@ -121,7 +121,12 @@ export function mergeDials(opts, dials, flagged) {
     if (field === "agent" && (flagged.has("agent") || flagged.has("readOnly"))) continue;
     if (field === "permissionMode" && (flagged.has("permissionMode") || flagged.has("readOnly"))) continue;
     if (field === "planOnly" && (flagged.has("planOnly") || flagged.has("readOnly"))) continue;
-    if (field === "readOnly" && flagged.has("readOnly")) continue;
+    if (
+      field === "readOnly" &&
+      (flagged.has("readOnly") || flagged.has("dangerouslySkipPermissions"))
+    ) {
+      continue;
+    }
     if (field === "force" && flagged.has("force")) continue;
     opts[field] = value;
   }
