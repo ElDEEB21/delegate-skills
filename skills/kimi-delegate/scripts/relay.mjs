@@ -71,6 +71,7 @@ import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_TIMEOUT = "30m";
+const MAX_TIMER_MS = 2_147_483_647;
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -124,7 +125,7 @@ function parseArgs(argv) {
   // The watchdog is relay-only (kimi has no timeout flag), so a malformed
   // --timeout must fail loudly here - a silent 30m fallback would be wrong.
   if (parseDuration(opts.timeout) === null) {
-    fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
+    fail(`--timeout "${opts.timeout}" is invalid or too long; use a positive h/m/s duration no longer than about 24 days`);
   }
   return opts;
 }
@@ -188,7 +189,17 @@ function parseDuration(duration) {
   // Whole-string match: "1mtypo" must be rejected, not read as one minute.
   const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(duration);
   if (!match || (!match[1] && !match[2] && !match[3])) return null;
-  return (Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)) * 1000;
+  try {
+    const seconds =
+      BigInt(match[1] || 0) * 3600n +
+      BigInt(match[2] || 0) * 60n +
+      BigInt(match[3] || 0);
+    const milliseconds = seconds * 1000n;
+    if (milliseconds <= 0n || milliseconds > BigInt(MAX_TIMER_MS)) return null;
+    return Number(milliseconds);
+  } catch {
+    return null;
+  }
 }
 
 function gitTouchedFiles(cwd) {
