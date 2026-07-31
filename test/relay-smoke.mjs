@@ -1590,9 +1590,12 @@ if (WIN) {
     join(cfgRepo, ".git", "config"),
     "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n",
   );
+  // Node's os.homedir() uses HOME on POSIX and USERPROFILE on Windows.
   const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
   const prevXdg = process.env.XDG_CONFIG_HOME;
   process.env.HOME = cfgHome;
+  process.env.USERPROFILE = cfgHome;
   delete process.env.XDG_CONFIG_HOME;
 
   const good = {
@@ -1688,6 +1691,8 @@ if (WIN) {
 
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
+  if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = prevUserProfile;
   if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
   else process.env.XDG_CONFIG_HOME = prevXdg;
   rmSync(fleetRoot, { recursive: true, force: true });

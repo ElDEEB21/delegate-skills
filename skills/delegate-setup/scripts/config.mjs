@@ -14,13 +14,12 @@
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -181,13 +180,21 @@ export function writeAtomic(targetPath, document) {
   const parsed = parseConfigDocument(JSON.stringify(document), "write payload");
   if (!parsed.ok) fail(parsed.error);
   mkdirSync(dirname(targetPath), { recursive: true });
-  const dir = mkdtempSync(join(tmpdir(), "delegate-fleet-"));
-  const tmp = join(dir, "config.json");
+  // Temp file must live beside the target: renameSync across drives fails on Windows (EXDEV).
+  const tmp = join(
+    dirname(targetPath),
+    `.config.${process.pid}.${Date.now()}.tmp`,
+  );
   try {
     writeFileSync(tmp, `${JSON.stringify(parsed.document, null, 2)}\n`, "utf8");
     renameSync(tmp, targetPath);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+  } catch (error) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // best-effort cleanup
+    }
+    throw error;
   }
 }
 
