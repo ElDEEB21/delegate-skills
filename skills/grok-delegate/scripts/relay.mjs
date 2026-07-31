@@ -234,12 +234,12 @@ function grokVersion(probeTimeoutMs) {
   // auto-appends .exe, never .cmd, so launching it needs shell:true there or it
   // ENOENTs on a working install. POSIX is unaffected. (git installs a real
   // git.exe and must NOT get this flag — see gitTouchedFiles.)
-  const probe = (argv) => {
+  const probe = (argv, timeout = probeTimeoutMs) => {
     try {
       const version = execFileSync("grok", argv, {
         encoding: "utf8",
         shell: process.platform === "win32",
-        timeout: probeTimeoutMs,
+        timeout,
         killSignal: "SIGKILL",
       }).trim();
       return { version: version || "unknown", error: null };
@@ -260,9 +260,12 @@ function grokVersion(probeTimeoutMs) {
   // Prefer `grok version` (documented subcommand); fall back to `--version` for builds that
   // only answer the flag. A missing binary and a hung probe are both conclusive, though:
   // retrying either would only spend the bound a second time.
+  const startedAt = performance.now();
   const documented = probe(["version"]);
   if (documented.version || !documented.error || documented.error.code === "ETIMEDOUT") return documented;
-  return probe(["--version"]);
+  const remainingMs = Math.floor(probeTimeoutMs - (performance.now() - startedAt));
+  if (remainingMs <= 0) return { version: null, error: { code: "ETIMEDOUT" } };
+  return probe(["--version"], remainingMs);
 }
 
 function gitTouchedFiles(cwd) {

@@ -122,7 +122,15 @@ const args = process.argv.slice(2);
 // Every probe form one relay or another uses: --version, grok's \`version\` subcommand, and
 // agy's \`changelog\`. Treating them alike lets any relay's hang/fail mode be driven by name.
 const versionProbe = args.includes("--version") || args[0] === "version" || args[0] === "changelog";
-if (versionProbe && /-version-hang$/.test(process.env.SMOKE_MODE || "")) {
+if (versionProbe && process.env.SMOKE_MODE === "grok-version-fallback-budget") {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 700);
+  if (args[0] === "version") {
+    console.error("fake documented version failure");
+    process.exit(7);
+  }
+  console.log("fake-cli 0.0.0-smoke");
+  process.exit(0);
+} else if (versionProbe && /-version-hang$/.test(process.env.SMOKE_MODE || "")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 } else if (versionProbe && /-version-fail$/.test(process.env.SMOKE_MODE || "")) {
   console.error("fake version failure");
@@ -825,6 +833,20 @@ for (const skill of ["codex", "opencode", "grok", "kimi"]) {
     missing.status === 127 &&
     existsSync(join(missingOutDir, "result.json")) &&
     result(missingOutDir).status === `${skill}_unavailable`);
+}
+
+if (!WIN) {
+  const workDir = freshRepo("work-preflight-grok-fallback-budget");
+  const outDir = join(scratch, "out-grok-version-fallback-budget");
+  const preflight = spawnSync(process.execPath, [
+    relayPath("grok"),
+    "--brief", briefPath,
+    "--cd", workDir,
+    "--out-dir", outDir,
+    "--timeout", "1s",
+  ], { env: { ...baseEnv, SMOKE_MODE: "grok-version-fallback-budget" }, encoding: "utf8", timeout: 15_000 });
+  check("grok preflight: fallback shares one timeout budget",
+    preflight.status === 124 && result(outDir).status === "timeout");
 }
 
 // ---- no relay accepts a --timeout its watchdog cannot honour ----
