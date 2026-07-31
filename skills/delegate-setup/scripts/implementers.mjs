@@ -111,7 +111,7 @@ export const IMPLEMENTERS = Object.freeze([
     binary: "cursor-agent",
     versionArgs: ["--version"],
     authProbe: null,
-    modelProbe: { args: ["--list-models"], format: "cursor" },
+    modelProbe: { args: ["models"], format: "cursor" },
     // cursor-agent has no --sandbox; autonomy is --force / --read-only.
     supports: ["model", "force", "timeout", "readOnly"],
     winShell: true,

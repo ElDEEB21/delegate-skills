@@ -71,14 +71,21 @@ export function resolveLaneForRelay(cwd, laneName, implementerKey) {
 
 function normalizeDials(implementerKey, raw) {
   const dials = { ...raw };
-  if (implementerKey === "grok" && typeof dials.sandbox === "string") {
-    const map = {
-      workspace: "workspace-write",
-      "read-only": "read-only",
-      off: "full-access",
-    };
-    dials.autonomy = map[dials.sandbox] ?? dials.sandbox;
-    delete dials.sandbox;
+  if (implementerKey === "grok") {
+    if (typeof dials.sandbox === "string") {
+      const map = {
+        workspace: "workspace-write",
+        "read-only": "read-only",
+        off: "full-access",
+      };
+      dials.autonomy = map[dials.sandbox] ?? dials.sandbox;
+      delete dials.sandbox;
+    }
+    // Grok relay consumes autonomy, not readOnly.
+    if (dials.readOnly === true) {
+      if (dials.autonomy === undefined) dials.autonomy = "read-only";
+      delete dials.readOnly;
+    }
   }
   if (implementerKey === "codex" && dials.readOnly === true) {
     if (dials.sandbox === undefined) dials.sandbox = "read-only";

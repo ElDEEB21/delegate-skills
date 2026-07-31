@@ -30,14 +30,16 @@ Never create `.delegate/config.json` merely because cwd is a git repo.
 4. On explicit approval, write via:
 
 ```bash
+# Write the approved JSON to a platform temp file first (mktemp / os.tmpdir() / %TEMP%), then:
 # global
-node <skill-dir>/scripts/config.mjs write --scope global /tmp/lanes.json
+node <skill-dir>/scripts/config.mjs write --scope global "$LANES_JSON"
 
 # project
-node <skill-dir>/scripts/config.mjs write --scope project --cwd <repo> /tmp/lanes.json
+node <skill-dir>/scripts/config.mjs write --scope project --cwd <repo> "$LANES_JSON"
 ```
 
-Prefer writing a temp JSON file then calling `write`, or write atomically yourself with the same schema checks. Re-read with `load` and confirm the path.
+Prefer a temp JSON file then `write`, or write atomically yourself with the same schema checks.
+Re-read with `load` and confirm the path. Do not hard-code `/tmp` (breaks on native Windows).
 
 ## Auth and models
 

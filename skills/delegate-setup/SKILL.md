@@ -5,8 +5,8 @@ description: >-
   with optional model and effort (or variant) dials. Discovers installed CLIs, proposes
   a lane map for user approval, and writes global or project config only after explicit
   yes. Use when the user asks to set up, configure, or reconfigure delegation lanes,
-  fleet routing, or which agent handles feature/tests/ui work — not for dispatching a
-  coding task to an implementer.
+  a fleet of lanes, or which implementer handles feature/tests/ui work — not for
+  dispatching a coding task to an implementer.
 license: MIT
 compatibility: Requires Node 18+. No implementer CLIs are required — the skill discovers what is available.
 metadata:
@@ -22,7 +22,7 @@ This skill does **not** dispatch coding work. It only authors the lane map.
 
 One concept: **lanes**. Never say “routes.”
 
-Example lane: **feature** → implementer `opencode`, model `grok`, variant `high`
+Example lane: **feature** → implementer `opencode`, model `opencode/grok`, variant `high`
 (OpenCode uses `variant` for reasoning intensity, not `effort`).
 
 ## When NOT to use this
@@ -94,10 +94,12 @@ Schema and dial table: [references/schema.md](references/schema.md).
 On explicit yes, write **only** the chosen path (validate first):
 
 ```bash
-# build /tmp/lanes.json with the approved document (no "source" fields), then:
-node "<skill-dir>/scripts/config.mjs" validate /tmp/lanes.json
-node "<skill-dir>/scripts/config.mjs" write --scope global /tmp/lanes.json
-# or:  write --scope project --cwd /path/to/repo /tmp/lanes.json
+# Write the approved document (no "source" fields) to a temp file, then validate/write.
+# Use a platform temp path (mktemp, $TMPDIR, %TEMP%, or Node os.tmpdir()) — not a hard-coded /tmp.
+LANES_JSON="$(mktemp "${TMPDIR:-/tmp}/lanes.XXXXXX.json")"   # or equivalent on Windows
+node "<skill-dir>/scripts/config.mjs" validate "$LANES_JSON"
+node "<skill-dir>/scripts/config.mjs" write --scope global "$LANES_JSON"
+# or:  write --scope project --cwd /path/to/repo "$LANES_JSON"
 ```
 
 Confirm the path written and the active lane names. On update, a short before/after is enough.

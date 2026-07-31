@@ -41,7 +41,7 @@
  * Node built-ins only.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, chmodSync, mkdirSync, copyFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, chmodSync, mkdirSync, copyFileSync, symlinkSync } from "node:fs";
 import { join, delimiter, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -1602,7 +1602,7 @@ if (WIN) {
     const good = {
       version: "delegate-fleet.v1",
       lanes: {
-        feature: { implementer: "opencode", model: "grok", variant: "high" },
+        feature: { implementer: "opencode", model: "opencode/grok", variant: "high" },
         tests: { implementer: "grok", effort: "medium" },
       },
     };
@@ -1615,9 +1615,57 @@ if (WIN) {
     });
     check("config validate accepts a good map", validate.status === 0);
 
+    const bareOpenCode = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "opencode" } },
+    };
+    const bareOpenCodeFile = join(cfgRepo, "bare-opencode.json");
+    writeFileSync(bareOpenCodeFile, `${JSON.stringify(bareOpenCode)}\n`);
+    const rejectBare = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", bareOpenCodeFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    check("config validate requires model on opencode", rejectBare.status === 2);
+
+    const bareModel = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "opencode", model: "grok" } },
+    };
+    const bareModelFile = join(cfgRepo, "bare-model.json");
+    writeFileSync(bareModelFile, `${JSON.stringify(bareModel)}\n`);
+    const rejectBareModel = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", bareModelFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    check("config validate requires provider/model for opencode", rejectBareModel.status === 2);
+
+    const hugeTimeout = {
+      version: "delegate-fleet.v1",
+      lanes: { slow: { implementer: "kimi", timeout: "999999999h" } },
+    };
+    const hugeTimeoutFile = join(cfgRepo, "huge-timeout.json");
+    writeFileSync(hugeTimeoutFile, `${JSON.stringify(hugeTimeout)}\n`);
+    const rejectTimeout = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", hugeTimeoutFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    check("config validate rejects timeout above relay ceiling", rejectTimeout.status === 2);
+
+    const conflictAutonomy = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "codex", readOnly: true, sandbox: "danger-full-access" } },
+    };
+    const conflictFile = join(cfgRepo, "conflict-autonomy.json");
+    writeFileSync(conflictFile, `${JSON.stringify(conflictAutonomy)}\n`);
+    const rejectConflict = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", conflictFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    check("config validate rejects contradictory readOnly+sandbox", rejectConflict.status === 2);
+
     const badEffort = {
       version: "delegate-fleet.v1",
-      lanes: { feature: { implementer: "opencode", model: "grok", effort: "high" } },
+      lanes: { feature: { implementer: "opencode", model: "opencode/grok", effort: "high" } },
     };
     const badFile = join(cfgRepo, "bad.json");
     writeFileSync(badFile, `${JSON.stringify(badEffort)}\n`);
@@ -1676,10 +1724,43 @@ if (WIN) {
       "lane resolve: feature → opencode dials",
       laneResolve.status === 0 &&
         laneJson?.implementer === "opencode" &&
-        laneJson?.dials?.model === "grok" &&
+        laneJson?.dials?.model === "opencode/grok" &&
         laneJson?.dials?.variant === "high" &&
         laneJson?.source === "global",
     );
+
+    const grokReadOnly = {
+      version: "delegate-fleet.v1",
+      lanes: { review: { implementer: "grok", readOnly: true } },
+    };
+    const grokReadOnlyFile = join(cfgRepo, "grok-readonly.json");
+    writeFileSync(grokReadOnlyFile, `${JSON.stringify(grokReadOnly)}\n`);
+    spawnSync(process.execPath, [join(setupDir, "config.mjs"), "write", "--scope", "global", grokReadOnlyFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    const grokResolve = spawnSync(
+      process.execPath,
+      [join(setupDir, "lane.mjs"), "resolve", "--cwd", bare, "--lane", "review", "--implementer", "grok"],
+      { encoding: "utf8", env: process.env },
+    );
+    let grokDials = null;
+    try {
+      grokDials = JSON.parse(grokResolve.stdout);
+    } catch {
+      grokDials = null;
+    }
+    check(
+      "lane resolve: grok readOnly → autonomy read-only",
+      grokResolve.status === 0 &&
+        grokDials?.dials?.autonomy === "read-only" &&
+        grokDials?.dials?.readOnly === undefined,
+    );
+    // Restore the multi-lane global map for the rest of the fleet suite.
+    spawnSync(process.execPath, [join(setupDir, "config.mjs"), "write", "--scope", "global", goodFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
 
     const laneMismatchResolve = spawnSync(
       process.execPath,
@@ -1716,13 +1797,13 @@ if (WIN) {
     const laneArgs = existsSync(laneArgsFile) ? JSON.parse(readFileSync(laneArgsFile, "utf8")) : [];
     check("relay --lane: opencode applies model+variant from lane",
       laneDispatch.status === 0 &&
-        pair(laneArgs, "--model", "grok") &&
+        pair(laneArgs, "--model", "opencode/grok") &&
         pair(laneArgs, "--variant", "high"));
     check("relay --lane: result records lane provenance",
       existsSync(join(laneOut, "result.json")) &&
         result(laneOut).lane === "feature" &&
         result(laneOut).laneSource === "global" &&
-        result(laneOut).model === "grok" &&
+        result(laneOut).model === "opencode/grok" &&
         result(laneOut).variant === "high");
 
     const wrongSkill = spawnSync(
@@ -1777,6 +1858,32 @@ if (WIN) {
     );
     check("config write --scope project", writeProject.status === 0);
     check("project config file created", existsSync(join(cfgRepo, ".delegate", "config.json")));
+
+    // Symlinked .delegate must not escape the repo.
+    const escapeRepo = join(fleetRoot, "escape-repo");
+    const escapeOutside = join(fleetRoot, "escape-outside");
+    mkdirSync(escapeRepo);
+    mkdirSync(escapeOutside);
+    mkdirSync(join(escapeRepo, ".git", "objects"), { recursive: true });
+    mkdirSync(join(escapeRepo, ".git", "refs", "heads"), { recursive: true });
+    writeFileSync(join(escapeRepo, ".git", "HEAD"), "ref: refs/heads/master\n");
+    writeFileSync(join(escapeRepo, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n");
+    try {
+      symlinkSync(escapeOutside, join(escapeRepo, ".delegate"));
+      const escapeWrite = spawnSync(
+        process.execPath,
+        [join(setupDir, "config.mjs"), "write", "--scope", "project", "--cwd", escapeRepo, projectFile],
+        { encoding: "utf8", env: process.env },
+      );
+      check(
+        "config write rejects symlinked .delegate",
+        escapeWrite.status === 2 &&
+          /symlink/.test(escapeWrite.stderr) &&
+          !existsSync(join(escapeOutside, "config.json")),
+      );
+    } catch (error) {
+      check(`config write symlink guard runnable (${error.code || error.message})`, process.platform === "win32");
+    }
 
     const load = spawnSync(
       process.execPath,

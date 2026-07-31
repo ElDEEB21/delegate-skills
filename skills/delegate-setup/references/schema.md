@@ -10,7 +10,7 @@ One concept: **lanes**. A lane names an implementer and optional dials.
   "lanes": {
     "feature": {
       "implementer": "opencode",
-      "model": "grok",
+      "model": "opencode/grok",
       "variant": "high"
     },
     "tests": {
@@ -55,8 +55,11 @@ Project overlays global by **whole-lane replace** (same lane name in project ful
 | `pi` | pi-delegate | `pi` | provider, model, timeout, readOnly |
 
 OpenCode uses `variant` for reasoning intensity, not `effort`. Do not write `effort` on an `opencode` lane.
+OpenCode lanes **require** `model` in `provider/model` form (a bare name is rejected).
 
-Boolean dials: `readOnly`, `force`. All other dials are non-empty strings. Duration strings for `timeout` use `h`/`m`/`s` (e.g. `30m`) when relays consume them in Phase 2.
+Boolean dials: `readOnly`, `force`. All other dials are non-empty strings. Duration strings for
+`timeout` use `h`/`m`/`s` (e.g. `30m`) and must fit the relay watchdog ceiling (~24.8 days).
+Do not combine `readOnly: true` with a write-capable `sandbox` / `permissionMode` / `force`.
 
 ## Helpers
 

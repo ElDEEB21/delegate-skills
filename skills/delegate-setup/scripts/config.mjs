@@ -13,14 +13,16 @@
 
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import {
@@ -34,6 +36,9 @@ import {
   QODER_PERMISSION,
   TIMEOUT_RE,
 } from "./implementers.mjs";
+
+/** Same ceiling relays use for --timeout (Node setTimeout max ~24.8 days). */
+const MAX_TIMER_MS = 2_147_483_647;
 
 const HELP = `config.mjs — load / validate / write delegate-fleet.v1 lane maps
 
@@ -139,14 +144,60 @@ function validateLane(name, lane, label) {
     const valueError = validateDialValue(impl.key, field, lane[field], name, label);
     if (valueError) return valueError;
   }
+  if (impl.key === "opencode") {
+    if (typeof lane.model !== "string" || !lane.model) {
+      return `${label}: lane ${name}: opencode requires model (provider/model)`;
+    }
+    if (!lane.model.includes("/")) {
+      return `${label}: lane ${name}.model must be provider/model (e.g. opencode/grok)`;
+    }
+  }
+  const autonomyError = validateAutonomyConsistency(impl.key, lane, name, label);
+  if (autonomyError) return autonomyError;
   return null;
+}
+
+function validateAutonomyConsistency(implementer, lane, laneName, label) {
+  if (lane.readOnly !== true) return null;
+  if (implementer === "codex" && typeof lane.sandbox === "string" && lane.sandbox !== "read-only") {
+    return `${label}: lane ${laneName}: readOnly contradicts sandbox ${JSON.stringify(lane.sandbox)}`;
+  }
+  if (implementer === "grok" && typeof lane.sandbox === "string" && lane.sandbox !== "read-only") {
+    return `${label}: lane ${laneName}: readOnly contradicts sandbox ${JSON.stringify(lane.sandbox)}`;
+  }
+  if (
+    implementer === "qoder" &&
+    typeof lane.permissionMode === "string" &&
+    lane.permissionMode !== "plan"
+  ) {
+    return `${label}: lane ${laneName}: readOnly contradicts permissionMode ${JSON.stringify(lane.permissionMode)}`;
+  }
+  if (implementer === "cursor" && lane.force === true) {
+    return `${label}: lane ${laneName}: readOnly contradicts force true`;
+  }
+  return null;
+}
+
+function parseTimeoutMs(value) {
+  const match = TIMEOUT_RE.exec(value);
+  if (!match || (!match[1] && !match[2] && !match[3])) return null;
+  try {
+    const seconds =
+      BigInt(match[1] || 0) * 3600n +
+      BigInt(match[2] || 0) * 60n +
+      BigInt(match[3] || 0);
+    const milliseconds = seconds * 1000n;
+    if (milliseconds <= 0n || milliseconds > BigInt(MAX_TIMER_MS)) return null;
+    return Number(milliseconds);
+  } catch {
+    return null;
+  }
 }
 
 function validateDialValue(implementer, field, value, laneName, label) {
   if (field === "timeout") {
-    const match = TIMEOUT_RE.exec(value);
-    if (!match || (!match[1] && !match[2] && !match[3])) {
-      return `${label}: lane ${laneName}.timeout must be a positive h/m/s duration (e.g. 30m)`;
+    if (parseTimeoutMs(value) === null) {
+      return `${label}: lane ${laneName}.timeout must be a positive h/m/s duration no longer than about 24 days (e.g. 30m)`;
     }
     return null;
   }
@@ -172,6 +223,32 @@ function validateDialValue(implementer, field, value, laneName, label) {
     return `${label}: lane ${laneName}.permissionMode must be one of: ${QODER_PERMISSION.join(", ")}`;
   }
   return null;
+}
+
+/**
+ * Refuse project writes that escape the git root via a symlinked `.delegate`.
+ */
+export function assertSafeProjectConfigPath(cwd) {
+  const root = findGitRoot(cwd);
+  if (!root) throw new Error("project scope requires a git repository (--cwd)");
+  const delegateDir = join(root, ".delegate");
+  if (existsSync(delegateDir) && lstatSync(delegateDir).isSymbolicLink()) {
+    throw new Error("refusing to write: .delegate is a symlink");
+  }
+  mkdirSync(delegateDir, { recursive: true });
+  if (lstatSync(delegateDir).isSymbolicLink()) {
+    throw new Error("refusing to write: .delegate is a symlink");
+  }
+  const realRoot = realpathSync(root);
+  const realDelegate = realpathSync(delegateDir);
+  const rel = relative(realRoot, realDelegate);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error("refusing to write: .delegate resolves outside the git repository");
+  }
+  if (rel !== ".delegate" && !rel.startsWith(`.delegate${sep}`)) {
+    throw new Error("refusing to write: unexpected .delegate path");
+  }
+  return join(delegateDir, "config.json");
 }
 
 export function readConfigFile(path) {
@@ -283,8 +360,7 @@ function main(argv) {
       }).at(-1);
       if (!file) fail("write needs a JSON file path");
       const target =
-        scope === "global" ? globalConfigPath() : projectConfigPath(cwd);
-      if (!target) fail("project scope requires a git repository (--cwd)");
+        scope === "global" ? globalConfigPath() : assertSafeProjectConfigPath(cwd);
       const parsed = parseConfigDocument(readFileSync(resolve(file), "utf8"), file);
       if (!parsed.ok) fail(parsed.error);
       writeAtomic(target, parsed.document);

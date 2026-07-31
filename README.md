@@ -51,7 +51,7 @@ then see [CONTRIBUTING.md](CONTRIBUTING.md).
 | --- | --- |
 | [`delegate-setup`](skills/delegate-setup/SKILL.md) | Discover installed CLIs, propose **fleet lanes** (implementer + model/effort dials), write global or project config after you approve. Never dispatches work. |
 
-A **lane** is a named binding such as “feature → OpenCode, model `grok`, variant `high`.” Config lives at
+A **lane** is a named binding such as “feature → OpenCode, model `opencode/grok`, variant `high`.” Config lives at
 `$XDG_CONFIG_HOME/delegate-skills/config.json` when set, otherwise `~/.config/delegate-skills/config.json`
 (global), or `.delegate/config.json` (opt-in per repo). After setup, dispatch with the matching
 `*-delegate` skill and `--lane <name>` — dials apply from the lane; explicit flags still win; the wrong
