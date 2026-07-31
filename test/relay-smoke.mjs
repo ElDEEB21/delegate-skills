@@ -48,6 +48,8 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SKILLS = ["claude", "codex", "opencode", "agy", "grok", "kimi", "qoder", "vibe", "cursor", "pi"];
+/** Utility skills: not *-delegate, no relay.mjs / four-reference contract. */
+const UTILITY_SKILLS = ["delegate-setup"];
 const binaryName = (skill) => skill === "qoder" ? "qodercli" : skill === "cursor" ? "cursor-agent" : skill;
 const relayPath = (skill) => join(here, "..", "skills", `${skill}-delegate`, "scripts", "relay.mjs");
 const WIN = process.platform === "win32";
@@ -85,15 +87,16 @@ const alive = (pid) => {
 // the one thing a hard-coded list cannot catch is its own omission.
 {
   const skillsDir = join(here, "..", "skills");
-  const onDisk = readdirSync(skillsDir).filter((d) => d.endsWith("-delegate")).sort();
+  const onDiskDelegate = readdirSync(skillsDir).filter((d) => d.endsWith("-delegate")).sort();
+  const onDiskUtility = readdirSync(skillsDir).filter((d) => UTILITY_SKILLS.includes(d)).sort();
   const registered = new Set(
     JSON.parse(readFileSync(join(here, "..", "skills.sh.json"), "utf8"))
       .groupings.flatMap((g) => g.skills),
   );
   const REFERENCES = ["writing-the-brief", "dispatch-and-poll", "review-and-land", "multi-task-queues"];
 
-  check("skills/ is not empty", onDisk.length > 0);
-  for (const dir of onDisk) {
+  check("skills/ is not empty", onDiskDelegate.length > 0);
+  for (const dir of onDiskDelegate) {
     const name = dir.replace(/-delegate$/, "");
     check(`${name}: in the smoke matrix`, SKILLS.includes(name));
     check(`${name}: SKILL.md`, existsSync(join(skillsDir, dir, "SKILL.md")));
@@ -105,8 +108,24 @@ const alive = (pid) => {
     );
     check(`${name}: listed in skills.sh.json`, registered.has(dir));
   }
-  check("smoke matrix has no entry without a directory", SKILLS.every((s) => onDisk.includes(`${s}-delegate`)));
-  check("skills.sh.json has no entry without a directory", [...registered].every((s) => onDisk.includes(s)));
+  for (const dir of UTILITY_SKILLS) {
+    check(`${dir}: directory present`, existsSync(join(skillsDir, dir)));
+    check(`${dir}: SKILL.md`, existsSync(join(skillsDir, dir, "SKILL.md")));
+    check(`${dir}: no relay.mjs`, !existsSync(join(skillsDir, dir, "scripts", "relay.mjs")));
+    check(`${dir}: listed in skills.sh.json`, registered.has(dir));
+    check(`${dir}: in the utility carve-out`, onDiskUtility.includes(dir));
+  }
+  check("smoke matrix has no entry without a directory", SKILLS.every((s) => onDiskDelegate.includes(`${s}-delegate`)));
+  check(
+    "skills.sh.json has no entry without a directory",
+    [...registered].every((s) => existsSync(join(skillsDir, s))),
+  );
+  check(
+    "no unexpected skill directories",
+    readdirSync(skillsDir).every(
+      (d) => d.endsWith("-delegate") || UTILITY_SKILLS.includes(d),
+    ),
+  );
 }
 
 // ---- every relay must at least parse ----
@@ -1524,6 +1543,154 @@ if (WIN) {
     implementerPid !== null && await until(() => !alive(implementerPid), 5000));
   check("vibe defiant abort: the implementer's own subprocess is dead",
     grandPid !== null && await until(() => !alive(grandPid), 5000));
+}
+
+// ---- delegate-setup: discover + fleet (fleet lanes) ----
+{
+  const setupDir = join(here, "..", "skills", "delegate-setup", "scripts");
+  for (const script of ["discover.mjs", "config.mjs", "implementers.mjs"]) {
+    const c = spawnSync(process.execPath, ["--check", join(setupDir, script)], { encoding: "utf8" });
+    check(`syntax: delegate-setup/scripts/${script}`, c.status === 0);
+  }
+
+  const help = spawnSync(process.execPath, [join(setupDir, "discover.mjs"), "--help"], { encoding: "utf8" });
+  check("discover --help exits 0", help.status === 0 && /discover\.mjs/.test(help.stdout));
+
+  const discover = spawnSync(process.execPath, [join(setupDir, "discover.mjs")], {
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  check("discover exits 0", discover.status === 0);
+  let report = null;
+  try {
+    report = JSON.parse(discover.stdout);
+  } catch {
+    report = null;
+  }
+  check("discover reports version", report?.version === "delegate-discover.v1");
+  check("discover lists discovered or missing", Array.isArray(report?.discovered) && Array.isArray(report?.missing));
+  check(
+    "discover covers all ten implementers",
+    report && report.discovered.length + report.missing.length === SKILLS.length,
+  );
+
+  // Keep fixtures inside the repo tree so sandboxed CI/dev runs can write; seed a
+  // minimal .git without `git init` (hooks/config writes are often blocked).
+  const fleetRoot = mkdtempSync(join(here, "..", ".tmp-fleet-smoke-"));
+  const cfgHome = join(fleetRoot, "home");
+  const cfgRepo = join(fleetRoot, "repo");
+  const bare = join(fleetRoot, "bare");
+  mkdirSync(cfgHome);
+  mkdirSync(cfgRepo);
+  mkdirSync(bare);
+  mkdirSync(join(cfgRepo, ".git", "objects"), { recursive: true });
+  mkdirSync(join(cfgRepo, ".git", "refs", "heads"), { recursive: true });
+  writeFileSync(join(cfgRepo, ".git", "HEAD"), "ref: refs/heads/master\n");
+  writeFileSync(
+    join(cfgRepo, ".git", "config"),
+    "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n",
+  );
+  const prevHome = process.env.HOME;
+  const prevXdg = process.env.XDG_CONFIG_HOME;
+  process.env.HOME = cfgHome;
+  delete process.env.XDG_CONFIG_HOME;
+
+  const good = {
+    version: "delegate-fleet.v1",
+    lanes: {
+      feature: { implementer: "opencode", model: "grok", variant: "high" },
+      tests: { implementer: "grok", effort: "medium" },
+    },
+  };
+  const goodFile = join(cfgRepo, "lanes.json");
+  writeFileSync(goodFile, `${JSON.stringify(good, null, 2)}\n`);
+
+  const validate = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", goodFile], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  check("config validate accepts a good map", validate.status === 0);
+
+  const badEffort = {
+    version: "delegate-fleet.v1",
+    lanes: { feature: { implementer: "opencode", model: "grok", effort: "high" } },
+  };
+  const badFile = join(cfgRepo, "bad.json");
+  writeFileSync(badFile, `${JSON.stringify(badEffort)}\n`);
+  const rejectEffort = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", badFile], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  check("config validate rejects effort on opencode", rejectEffort.status === 2);
+
+  const writeGlobal = spawnSync(
+    process.execPath,
+    [join(setupDir, "config.mjs"), "write", "--scope", "global", goodFile],
+    { encoding: "utf8", env: process.env },
+  );
+  check("config write --scope global", writeGlobal.status === 0);
+  const globalPath = join(cfgHome, ".config", "delegate-skills", "config.json");
+  check("global config file created", existsSync(globalPath));
+
+  const projectOnly = {
+    version: "delegate-fleet.v1",
+    lanes: {
+      feature: { implementer: "claude", effort: "high" },
+    },
+  };
+  const projectFile = join(cfgRepo, "project-lanes.json");
+  writeFileSync(projectFile, `${JSON.stringify(projectOnly, null, 2)}\n`);
+  const writeProject = spawnSync(
+    process.execPath,
+    [join(setupDir, "config.mjs"), "write", "--scope", "project", "--cwd", cfgRepo, projectFile],
+    { encoding: "utf8", env: process.env },
+  );
+  check("config write --scope project", writeProject.status === 0);
+  check("project config file created", existsSync(join(cfgRepo, ".delegate", "config.json")));
+
+  const load = spawnSync(
+    process.execPath,
+    [join(setupDir, "config.mjs"), "load", "--cwd", cfgRepo],
+    { encoding: "utf8", env: process.env },
+  );
+  check("config load exits 0", load.status === 0);
+  let effective = null;
+  try {
+    effective = JSON.parse(load.stdout);
+  } catch {
+    effective = null;
+  }
+  check(
+    "effective feature lane is project (whole-lane replace)",
+    effective?.lanes?.feature?.implementer === "claude" &&
+      effective?.lanes?.feature?.source === "project" &&
+      effective?.lanes?.feature?.effort === "high",
+  );
+  check(
+    "effective tests lane falls through to global",
+    effective?.lanes?.tests?.implementer === "grok" && effective?.lanes?.tests?.source === "global",
+  );
+
+  // Outside a project: load with cwd = non-git dir still sees global.
+  const loadBare = spawnSync(
+    process.execPath,
+    [join(setupDir, "config.mjs"), "load", "--cwd", bare],
+    { encoding: "utf8", env: process.env },
+  );
+  let bareEff = null;
+  try {
+    bareEff = JSON.parse(loadBare.stdout);
+  } catch {
+    bareEff = null;
+  }
+  check("load outside git uses global only", loadBare.status === 0 && bareEff?.lanes?.feature?.source === "global");
+  check("load outside git does not invent .delegate", !existsSync(join(bare, ".delegate")));
+
+  if (prevHome === undefined) delete process.env.HOME;
+  else process.env.HOME = prevHome;
+  if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = prevXdg;
+  rmSync(fleetRoot, { recursive: true, force: true });
 }
 
 rmSync(scratch, { recursive: true, force: true });

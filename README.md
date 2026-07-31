@@ -45,6 +45,17 @@ Each skill name links to its `SKILL.md`, which owns that implementer's prerequis
 caveats. Building one for another CLI? [Claim it first](../../issues?q=is%3Aissue+label%3Aimplementer),
 then see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+### Setup (utility)
+
+| Skill | Job |
+| --- | --- |
+| [`delegate-setup`](skills/delegate-setup/SKILL.md) | Discover installed CLIs, propose **fleet lanes** (implementer + model/effort dials), write global or project config after you approve. Never dispatches work. |
+
+A **lane** is a named binding such as “feature → OpenCode, model `grok`, variant `high`.” Config lives at
+`~/.config/delegate-skills/config.json` (global) or `.delegate/config.json` (opt-in per repo). Relays
+do not yet consume `--lane`; until they do, use the map as orchestrator guidance and pass dials as
+flags.
+
 ## Install
 
 Browse first:
@@ -139,11 +150,14 @@ Full checklist: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This package is intentionally inspectable:
 
-- All skill content is Markdown, plus exactly **one** executable per skill — each a `scripts/relay.mjs`.
-- Each `relay.mjs` makes no network calls, reads or writes no credentials, sends no telemetry, and has
-  no dependencies (Node built-ins only). It launches its implementer CLI and `git`, plus the platform
-  process launcher/termination utility where a Windows shim or process-tree kill requires one. The
-  implementer CLI authenticates exactly as you do at the terminal. Read the script before you run it.
+- All skill content is Markdown, plus small Node scripts. Each `*-delegate` skill has exactly one
+  `scripts/relay.mjs`. The `delegate-setup` utility ships `discover.mjs` / `config.mjs` (and a shared
+  implementer table) instead of a relay — it never dispatches coding work.
+- Those scripts make no network calls of their own, read or write no credentials, send no telemetry, and
+  have no dependencies (Node built-ins only). Relays launch an implementer CLI and `git`, plus the
+  platform process launcher/termination utility where a Windows shim or process-tree kill requires one.
+  Discover may invoke installed CLIs for `--version` / model list probes (those CLIs may contact their
+  own services). Read the script before you run it.
 - None of the relays ever commit — committing is always the orchestrator's job, after review.
 
 **Verification status** — claims here are backed by runs, not assumptions.
@@ -177,6 +191,9 @@ Per skill — platform, CLI version, and what the run exercised:
 - `codex-delegate`, `opencode-delegate`, `vibe-delegate` — contract-tested only: argument validation,
   bounded version preflight, missing binary, result parsing, and whole-process-tree timeout/abort
   cleanup. No end-to-end run is recorded here.
+- `delegate-setup` — contract-tested: discover JSON shape, config validate/write/load, whole-lane
+  project overlay, global write without creating `.delegate/`. Live discover against installed CLIs
+  runs in smoke (versions vary by machine). Native Windows discover smoke not yet claimed.
 
 Not yet verified: native Windows launches for `agy`, `claude`, `grok`, `kimi`, `pi`, `qoder`, and
 `vibe` (the `codex`/`opencode`/`grok` `.cmd` shim handling is in place and quoted; Cursor serializes a

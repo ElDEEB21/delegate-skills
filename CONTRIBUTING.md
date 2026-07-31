@@ -38,6 +38,23 @@ Four invariants hold for every skill here, and they are the bar for a new one:
 - [ ] A verification line in the README's **Verification status** list. Claim only what you ran —
       "contract-tested, live run pending" is a mergeable answer. "Verified" without a run is not.
 
+## Utility skills (exception)
+
+`delegate-setup` is a **utility** skill: it configures fleet **lanes** (discover → propose → approve →
+write). It is not an implementer skill.
+
+Utility checklist (instead of the four-references + `relay.mjs` bar above):
+
+- [ ] `skills/<name>/SKILL.md` with a `description` that triggers on setup/configure — **not** on
+      ordinary delegation.
+- [ ] Scripts under `scripts/` stay Node built-ins only (same trust line as relays).
+- [ ] No `relay.mjs`; the skill must not dispatch coding work to an implementer.
+- [ ] Registered in `skills.sh.json` (Setup grouping is fine).
+- [ ] Listed in the smoke suite's **utility** carve-out (not the `*-delegate` timeout/abort matrix).
+- [ ] A short README mention and vocabulary in `AGENTS.md` (`lane`, `fleet`, setup skill).
+
+Do not invent a second utility that duplicates lane setup. Extend `delegate-setup` instead.
+
 ## Everything else
 
 Fixes to a relay, a reference, or the README need no claim. Keep the diff to one concern, run
