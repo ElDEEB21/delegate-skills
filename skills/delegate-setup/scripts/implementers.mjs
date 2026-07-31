@@ -112,7 +112,8 @@ export const IMPLEMENTERS = Object.freeze([
     versionArgs: ["--version"],
     authProbe: null,
     modelProbe: { args: ["--list-models"], format: "cursor" },
-    supports: ["model", "sandbox", "force", "timeout", "readOnly"],
+    // cursor-agent has no --sandbox; autonomy is --force / --read-only.
+    supports: ["model", "force", "timeout", "readOnly"],
     winShell: true,
   },
   {
@@ -127,9 +128,27 @@ export const IMPLEMENTERS = Object.freeze([
   },
 ]);
 
+/** Prototype-free map so names like "toString" cannot pass as implementers. */
 export const IMPLEMENTER_BY_KEY = Object.freeze(
-  Object.fromEntries(IMPLEMENTERS.map((impl) => [impl.key, impl])),
+  IMPLEMENTERS.reduce((map, impl) => {
+    map[impl.key] = impl;
+    return map;
+  }, Object.create(null)),
 );
+
+export const CLAUDE_EFFORT = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultracode"]);
+export const CODEX_SANDBOX = Object.freeze(["read-only", "workspace-write", "danger-full-access"]);
+export const GROK_SANDBOX = Object.freeze(["workspace", "read-only", "off"]);
+export const QODER_PERMISSION = Object.freeze([
+  "default",
+  "accept_edits",
+  "auto",
+  "bypass_permissions",
+  "dont_ask",
+  "plan",
+]);
+/** Positive h/m/s duration, same shape relays accept. */
+export const TIMEOUT_RE = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/;
 
 export const CONFIG_VERSION = "delegate-fleet.v1";
 export const LANE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

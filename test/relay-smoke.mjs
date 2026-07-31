@@ -1627,6 +1627,30 @@ if (WIN) {
     });
     check("config validate rejects effort on opencode", rejectEffort.status === 2);
 
+    const badClaude = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "claude", effort: "banana" } },
+    };
+    const badClaudeFile = join(cfgRepo, "bad-claude.json");
+    writeFileSync(badClaudeFile, `${JSON.stringify(badClaude)}\n`);
+    const rejectClaude = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", badClaudeFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    check("config validate rejects unknown claude effort", rejectClaude.status === 2);
+
+    const badCursorSandbox = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "cursor", sandbox: "workspace-write" } },
+    };
+    const badCursorFile = join(cfgRepo, "bad-cursor.json");
+    writeFileSync(badCursorFile, `${JSON.stringify(badCursorSandbox)}\n`);
+    const rejectCursor = spawnSync(process.execPath, [join(setupDir, "config.mjs"), "validate", badCursorFile], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    check("config validate rejects cursor sandbox dial", rejectCursor.status === 2);
+
     const writeGlobal = spawnSync(
       process.execPath,
       [join(setupDir, "config.mjs"), "write", "--scope", "global", goodFile],

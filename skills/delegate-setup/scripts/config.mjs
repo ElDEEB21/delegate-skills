@@ -25,9 +25,14 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import {
   ALL_DIALS,
+  CLAUDE_EFFORT,
+  CODEX_SANDBOX,
   CONFIG_VERSION,
+  GROK_SANDBOX,
   IMPLEMENTER_BY_KEY,
   LANE_NAME,
+  QODER_PERMISSION,
+  TIMEOUT_RE,
 } from "./implementers.mjs";
 
 const HELP = `config.mjs — load / validate / write delegate-fleet.v1 lane maps
@@ -110,7 +115,7 @@ function validateLane(name, lane, label) {
   if (!lane || typeof lane !== "object" || Array.isArray(lane)) {
     return `${label}: lane ${name} must be an object`;
   }
-  if (typeof lane.implementer !== "string" || !IMPLEMENTER_BY_KEY[lane.implementer]) {
+  if (typeof lane.implementer !== "string" || IMPLEMENTER_BY_KEY[lane.implementer] == null) {
     return `${label}: lane ${name} needs implementer (one of: ${Object.keys(IMPLEMENTER_BY_KEY).join(", ")})`;
   }
   const impl = IMPLEMENTER_BY_KEY[lane.implementer];
@@ -126,9 +131,45 @@ function validateLane(name, lane, label) {
       if (typeof lane[field] !== "boolean") {
         return `${label}: lane ${name}.${field} must be a boolean`;
       }
-    } else if (typeof lane[field] !== "string" || lane[field].length === 0) {
+      continue;
+    }
+    if (typeof lane[field] !== "string" || lane[field].length === 0) {
       return `${label}: lane ${name}.${field} must be a non-empty string`;
     }
+    const valueError = validateDialValue(impl.key, field, lane[field], name, label);
+    if (valueError) return valueError;
+  }
+  return null;
+}
+
+function validateDialValue(implementer, field, value, laneName, label) {
+  if (field === "timeout") {
+    const match = TIMEOUT_RE.exec(value);
+    if (!match || (!match[1] && !match[2] && !match[3])) {
+      return `${label}: lane ${laneName}.timeout must be a positive h/m/s duration (e.g. 30m)`;
+    }
+    return null;
+  }
+  if (field === "effort") {
+    if (implementer === "claude" && !CLAUDE_EFFORT.includes(value)) {
+      return `${label}: lane ${laneName}.effort must be one of: ${CLAUDE_EFFORT.join(", ")}`;
+    }
+    if ((implementer === "codex" || implementer === "grok") && !/^[a-z][a-z0-9-]*$/i.test(value)) {
+      return `${label}: lane ${laneName}.effort must be a bare token`;
+    }
+    return null;
+  }
+  if (field === "sandbox") {
+    if (implementer === "codex" && !CODEX_SANDBOX.includes(value)) {
+      return `${label}: lane ${laneName}.sandbox must be one of: ${CODEX_SANDBOX.join(", ")}`;
+    }
+    if (implementer === "grok" && !GROK_SANDBOX.includes(value)) {
+      return `${label}: lane ${laneName}.sandbox must be one of: ${GROK_SANDBOX.join(", ")}`;
+    }
+    return null;
+  }
+  if (field === "permissionMode" && implementer === "qoder" && !QODER_PERMISSION.includes(value)) {
+    return `${label}: lane ${laneName}.permissionMode must be one of: ${QODER_PERMISSION.join(", ")}`;
   }
   return null;
 }

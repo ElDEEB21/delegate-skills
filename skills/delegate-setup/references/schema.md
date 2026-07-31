@@ -51,7 +51,7 @@ Project overlays global by **whole-lane replace** (same lane name in project ful
 | `kimi` | kimi-delegate | `kimi` | model, timeout |
 | `qoder` | qoder-delegate | `qodercli` | model, permissionMode, timeout, readOnly |
 | `vibe` | vibe-delegate | `vibe` | timeout, readOnly |
-| `cursor` | cursor-delegate | `cursor-agent` | model, sandbox, force, timeout, readOnly |
+| `cursor` | cursor-delegate | `cursor-agent` | model, force, timeout, readOnly |
 | `pi` | pi-delegate | `pi` | provider, model, timeout, readOnly |
 
 OpenCode uses `variant` for reasoning intensity, not `effort`. Do not write `effort` on an `opencode` lane.
