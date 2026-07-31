@@ -104,9 +104,10 @@ Confirm the path written and the active lane names. On update, a short before/af
 
 ### 6. Hand-off
 
-Stop after confirming. Tell the user the map is ready. Until relays grow `--lane` (follow-up), use
-the map as guidance: pick the matching `*-delegate` skill and pass `--model` / `--effort` /
-`--variant` from the lane. Do not start a delegate task unless they ask.
+Stop after confirming. Tell the user the map is ready. For later work: read the lane’s
+`implementer`, load that `*-delegate` skill, and dispatch with `--lane <name>` (explicit
+`--model` / `--effort` / `--variant` still win when passed). Do not start a delegate task
+unless they ask.
 
 ## Reconfigure
 

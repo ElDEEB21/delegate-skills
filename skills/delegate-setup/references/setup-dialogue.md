@@ -47,4 +47,4 @@ Prefer writing a temp JSON file then calling `write`, or write atomically yourse
 
 ## After write
 
-Tell the user the path and active lane names. Remind them: later, pick the `*-delegate` skill matching the lane’s `implementer` and pass `--lane <name>` once relays support it (Phase 2). Until then, use the map as orchestrator guidance and pass `--model` / `--effort` / `--variant` explicitly. Do not start a delegate task unless they ask.
+Tell the user the path and active lane names. Remind them: later, pick the `*-delegate` skill matching the lane’s `implementer` and dispatch with `--lane <name>` (explicit `--model` / `--effort` / `--variant` still win). Do not start a delegate task unless they ask.

@@ -31,6 +31,7 @@ Options:
 | --- | --- |
 | `--brief <file>` | The brief. Omit it to read the brief from stdin (`node relay.mjs … < brief.txt`). |
 | `--cd <dir>` | Working root for OpenCode (default: current directory). |
+| `--lane <name>` | Fleet lane from `delegate-setup` config. Applies that lane's dials; fails if the lane's `implementer` is not this relay. Explicit dial flags win. |
 | `--model <name>` | Model as `provider/model`. **Required on a fresh run** — OpenCode has no safe default (a bare `opencode run` errors); a resumed run inherits its session's model. |
 | `--agent <name>` | OpenCode agent (default: `build`, write-capable). |
 | `--read-only` | Shortcut for `--agent plan` — review/diagnosis with no edits. |

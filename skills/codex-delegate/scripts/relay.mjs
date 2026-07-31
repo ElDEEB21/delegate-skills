@@ -26,6 +26,7 @@
  * Options:
  *   --brief <file>          Path to the brief. If omitted, the brief is read from stdin.
  *   --cd <dir>              Working root for Codex (default: current directory).
+ *   --lane <name>           Fleet lane from delegate-setup config (dials apply; explicit flags win).
  *   --model <name>          Codex model (default: Codex's own configured default).
  *   --effort <level>        Reasoning effort, passed to Codex as
  *                           `-c model_reasoning_effort=<level>` (default: Codex's
@@ -65,9 +66,10 @@
  * with no file as a usage error.
  */
 
-import { spawn, execFileSync } from "node:child_process";
+import {spawn, execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync, appendFileSync } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import {join, resolve, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
@@ -76,13 +78,54 @@ const MAX_TIMER_MS = 2_147_483_647;
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
+const IMPLEMENTER_KEY = "codex";
+
+function applyFleetLane(opts, flagged) {
+  if (!opts.lane) return;
+  const script = join(dirname(fileURLToPath(import.meta.url)), "../../delegate-setup/scripts/lane.mjs");
+  if (!existsSync(script)) {
+    fail("--lane requires the delegate-setup skill installed beside this relay");
+  }
+  const r = spawnSync(
+    process.execPath,
+    [script, "resolve", "--cwd", opts.cd, "--lane", opts.lane, "--implementer", IMPLEMENTER_KEY],
+    { encoding: "utf8", env: process.env },
+  );
+  if (r.error) fail(`lane resolve failed: ${r.error.message}`);
+  if (r.status !== 0) {
+    fail((r.stderr || "lane resolve failed").trim().replace(/^lane\.mjs:\s*/, ""));
+  }
+  let resolved;
+  try {
+    const lines = (r.stdout || "").trim().split("\n").filter(Boolean);
+    resolved = JSON.parse(lines[lines.length - 1]);
+  } catch {
+    fail("lane resolve returned invalid JSON");
+  }
+  opts.laneSource = resolved.source;
+  for (const [field, value] of Object.entries(resolved.dials || {})) {
+    if (flagged.has(field)) continue;
+    if (field === "autonomy" && (flagged.has("autonomy") || flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "agent" && (flagged.has("agent") || flagged.has("readOnly"))) continue;
+    if (field === "sandbox" && (flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "permissionMode" && (flagged.has("permissionMode") || flagged.has("readOnly"))) continue;
+    if (field === "planOnly" && (flagged.has("planOnly") || flagged.has("readOnly"))) continue;
+    if (field === "readOnly" && flagged.has("readOnly")) continue;
+    if (field === "force" && flagged.has("force")) continue;
+    opts[field] = value;
+  }
+}
+
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
   process.exit(code);
 }
 
 function parseArgs(argv) {
+  const flagged = new Set();
   const opts = {
+    lane: null,
+    laneSource: null,
     brief: null,
     cd: process.cwd(),
     model: null,
@@ -110,19 +153,21 @@ function parseArgs(argv) {
         break;
       case "--brief": opts.brief = next(); break;
       case "--cd": opts.cd = resolve(next()); break;
-      case "--model": opts.model = next(); break;
-      case "--effort": opts.effort = next(); break;
-      case "--sandbox": opts.sandbox = next(); break;
-      case "--read-only": opts.sandbox = "read-only"; break;
+      case "--lane": opts.lane = next(); break;
+      case "--model": opts.model = next(); flagged.add("model"); break;
+      case "--effort": opts.effort = next(); flagged.add("effort"); break;
+      case "--sandbox": opts.sandbox = next(); flagged.add("sandbox"); break;
+      case "--read-only": opts.sandbox = "read-only"; flagged.add("sandbox"); flagged.add("readOnly"); break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--session": opts.session = next(); break;
       case "--skip-git-repo-check": opts.skipGitRepoCheck = true; break;
-      case "--timeout": opts.timeout = next(); break;
+      case "--timeout": opts.timeout = next(); flagged.add("timeout"); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
       default:
         fail(`unknown option: ${arg}`);
     }
   }
+  applyFleetLane(opts, flagged);
   if (!SANDBOX_MODES.has(opts.sandbox)) {
     fail(`invalid --sandbox "${opts.sandbox}" (expected: ${[...SANDBOX_MODES].join(", ")})`);
   }
@@ -331,6 +376,8 @@ function makeResultWriter(opts, version, run) {
   return (extra) => {
     const result = {
       schema: "delegate-relay.result.v1",
+      lane: opts.lane,
+      laneSource: opts.laneSource,
       workdir: opts.cd,
       sandbox: opts.resumeLast || opts.session ? "(inherited from resumed session)" : opts.sandbox,
       model: opts.model,

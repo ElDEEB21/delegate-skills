@@ -1548,7 +1548,7 @@ if (WIN) {
 // ---- delegate-setup: discover + fleet (fleet lanes) ----
 {
   const setupDir = join(here, "..", "skills", "delegate-setup", "scripts");
-  for (const script of ["discover.mjs", "config.mjs", "implementers.mjs"]) {
+  for (const script of ["discover.mjs", "config.mjs", "implementers.mjs", "lane.mjs"]) {
     const c = spawnSync(process.execPath, ["--check", join(setupDir, script)], { encoding: "utf8" });
     check(`syntax: delegate-setup/scripts/${script}`, c.status === 0);
   }
@@ -1660,6 +1660,108 @@ if (WIN) {
     const globalPath = join(cfgHome, ".config", "delegate-skills", "config.json");
     check("global config file created", existsSync(globalPath));
 
+    // Phase 2: --lane resolve / mismatch / flag override (global map only so far).
+    const laneResolve = spawnSync(
+      process.execPath,
+      [join(setupDir, "lane.mjs"), "resolve", "--cwd", cfgRepo, "--lane", "feature", "--implementer", "opencode"],
+      { encoding: "utf8", env: process.env },
+    );
+    let laneJson = null;
+    try {
+      laneJson = JSON.parse(laneResolve.stdout);
+    } catch {
+      laneJson = null;
+    }
+    check(
+      "lane resolve: feature → opencode dials",
+      laneResolve.status === 0 &&
+        laneJson?.implementer === "opencode" &&
+        laneJson?.dials?.model === "grok" &&
+        laneJson?.dials?.variant === "high" &&
+        laneJson?.source === "global",
+    );
+
+    const laneMismatchResolve = spawnSync(
+      process.execPath,
+      [join(setupDir, "lane.mjs"), "resolve", "--cwd", cfgRepo, "--lane", "feature", "--implementer", "claude"],
+      { encoding: "utf8", env: process.env },
+    );
+    check(
+      "lane resolve: wrong implementer fails loud",
+      laneMismatchResolve.status === 2 && /use opencode-delegate/.test(laneMismatchResolve.stderr),
+    );
+
+    const laneBrief = join(cfgRepo, "lane-brief.txt");
+    writeFileSync(laneBrief, "fleet lane smoke brief\n");
+    const laneOut = join(cfgRepo, "out-lane-opencode");
+    const laneArgsFile = join(cfgRepo, "args-lane-opencode.json");
+    mkdirSync(laneOut, { recursive: true });
+    // baseEnv snapped process.env before this block cleared XDG_CONFIG_HOME — drop it again.
+    const fleetEnv = { ...baseEnv, HOME: cfgHome, USERPROFILE: cfgHome };
+    delete fleetEnv.XDG_CONFIG_HOME;
+    const laneDispatch = spawnSync(
+      process.execPath,
+      [
+        relayPath("opencode"),
+        "--brief", laneBrief,
+        "--cd", cfgRepo,
+        "--out-dir", laneOut,
+        "--lane", "feature",
+      ],
+      {
+        encoding: "utf8",
+        env: { ...fleetEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: laneArgsFile },
+      },
+    );
+    const laneArgs = existsSync(laneArgsFile) ? JSON.parse(readFileSync(laneArgsFile, "utf8")) : [];
+    check("relay --lane: opencode applies model+variant from lane",
+      laneDispatch.status === 0 &&
+        pair(laneArgs, "--model", "grok") &&
+        pair(laneArgs, "--variant", "high"));
+    check("relay --lane: result records lane provenance",
+      existsSync(join(laneOut, "result.json")) &&
+        result(laneOut).lane === "feature" &&
+        result(laneOut).laneSource === "global" &&
+        result(laneOut).model === "grok" &&
+        result(laneOut).variant === "high");
+
+    const wrongSkill = spawnSync(
+      process.execPath,
+      [relayPath("claude"), "--brief", laneBrief, "--cd", cfgRepo, "--lane", "feature"],
+      { encoding: "utf8", env: fleetEnv },
+    );
+    check(
+      "relay --lane: wrong skill fails loud (no remap)",
+      wrongSkill.status === 2 &&
+        /use opencode-delegate/.test(wrongSkill.stderr) &&
+        !existsSync(join(cfgRepo, "result.json")),
+    );
+
+    const overrideOut = join(cfgRepo, "out-lane-override");
+    const overrideArgsFile = join(cfgRepo, "args-lane-override.json");
+    mkdirSync(overrideOut, { recursive: true });
+    const overrideRun = spawnSync(
+      process.execPath,
+      [
+        relayPath("opencode"),
+        "--brief", laneBrief,
+        "--cd", cfgRepo,
+        "--out-dir", overrideOut,
+        "--lane", "feature",
+        "--model", "openai/gpt-test",
+        "--variant", "low",
+      ],
+      {
+        encoding: "utf8",
+        env: { ...fleetEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: overrideArgsFile },
+      },
+    );
+    const overrideArgs = existsSync(overrideArgsFile) ? JSON.parse(readFileSync(overrideArgsFile, "utf8")) : [];
+    check("relay --lane: explicit flags win over lane dials",
+      overrideRun.status === 0 &&
+        pair(overrideArgs, "--model", "openai/gpt-test") &&
+        pair(overrideArgs, "--variant", "low"));
+
     const projectOnly = {
       version: "delegate-fleet.v1",
       lanes: {
@@ -1713,6 +1815,17 @@ if (WIN) {
     }
     check("load outside git uses global only", loadBare.status === 0 && bareEff?.lanes?.feature?.source === "global");
     check("load outside git does not invent .delegate", !existsSync(join(bare, ".delegate")));
+
+    // After project whole-lane replace, feature → claude; opencode must fail.
+    const afterOverlay = spawnSync(
+      process.execPath,
+      [relayPath("opencode"), "--brief", laneBrief, "--cd", cfgRepo, "--lane", "feature"],
+      { encoding: "utf8", env: fleetEnv },
+    );
+    check(
+      "relay --lane: project overlay remaps implementer (opencode fails)",
+      afterOverlay.status === 2 && /use claude-delegate/.test(afterOverlay.stderr),
+    );
   } finally {
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;

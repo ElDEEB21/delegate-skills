@@ -41,6 +41,7 @@
  * Options:
  *   --brief <file>          Path to the brief. If omitted, read it from stdin.
  *   --cd <dir>              Working root for pi (default: current directory).
+ *   --lane <name>           Fleet lane from delegate-setup config (dials apply; explicit flags win).
  *   --provider <name>       pi provider name (default: pi's own default).
  *   --model <pattern>       pi model id or pattern (default: pi's own default).
  *                           Letters, digits, and . _ : / - only.
@@ -73,7 +74,7 @@
  * was killed and forwarded the kill to pi), or pi_unavailable.
  */
 
-import { spawn, execFileSync } from "node:child_process";
+import {spawn, execFileSync, spawnSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
@@ -84,7 +85,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import {join, resolve, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
@@ -94,6 +96,44 @@ const READ_ONLY_TOOLS = "read,grep,find,ls";
 // --model, --provider, and --session values reach a shell on win32 (shell:true for the
 // .cmd shim), so they are restricted to safe tokens.
 const SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+
+const IMPLEMENTER_KEY = "pi";
+
+function applyFleetLane(opts, flagged) {
+  if (!opts.lane) return;
+  const script = join(dirname(fileURLToPath(import.meta.url)), "../../delegate-setup/scripts/lane.mjs");
+  if (!existsSync(script)) {
+    fail("--lane requires the delegate-setup skill installed beside this relay");
+  }
+  const r = spawnSync(
+    process.execPath,
+    [script, "resolve", "--cwd", opts.cd, "--lane", opts.lane, "--implementer", IMPLEMENTER_KEY],
+    { encoding: "utf8", env: process.env },
+  );
+  if (r.error) fail(`lane resolve failed: ${r.error.message}`);
+  if (r.status !== 0) {
+    fail((r.stderr || "lane resolve failed").trim().replace(/^lane\.mjs:\s*/, ""));
+  }
+  let resolved;
+  try {
+    const lines = (r.stdout || "").trim().split("\n").filter(Boolean);
+    resolved = JSON.parse(lines[lines.length - 1]);
+  } catch {
+    fail("lane resolve returned invalid JSON");
+  }
+  opts.laneSource = resolved.source;
+  for (const [field, value] of Object.entries(resolved.dials || {})) {
+    if (flagged.has(field)) continue;
+    if (field === "autonomy" && (flagged.has("autonomy") || flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "agent" && (flagged.has("agent") || flagged.has("readOnly"))) continue;
+    if (field === "sandbox" && (flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "permissionMode" && (flagged.has("permissionMode") || flagged.has("readOnly"))) continue;
+    if (field === "planOnly" && (flagged.has("planOnly") || flagged.has("readOnly"))) continue;
+    if (field === "readOnly" && flagged.has("readOnly")) continue;
+    if (field === "force" && flagged.has("force")) continue;
+    opts[field] = value;
+  }
+}
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -108,7 +148,10 @@ function parseDuration(duration) {
 }
 
 function parseArgs(argv) {
+  const flagged = new Set();
   const opts = {
+    lane: null,
+    laneSource: null,
     brief: null,
     cd: process.cwd(),
     provider: null,
@@ -136,18 +179,20 @@ function parseArgs(argv) {
         break;
       case "--brief": opts.brief = next(); break;
       case "--cd": opts.cd = resolve(next()); break;
-      case "--provider": opts.provider = next(); break;
-      case "--model": opts.model = next(); break;
+      case "--lane": opts.lane = next(); break;
+      case "--provider": opts.provider = next(); flagged.add("provider"); break;
+      case "--model": opts.model = next(); flagged.add("model"); break;
       case "--session": opts.session = next(); break;
       case "--resume-last": opts.resumeLast = true; break;
-      case "--read-only": opts.readOnly = true; break;
+      case "--read-only": opts.readOnly = true; flagged.add("readOnly"); break;
       case "--approve": opts.approve = true; break;
-      case "--timeout": opts.timeout = next(); break;
+      case "--timeout": opts.timeout = next(); flagged.add("timeout"); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
       default:
         fail(`unknown option: ${arg}`);
     }
   }
+  applyFleetLane(opts, flagged);
   if (opts.resumeLast && opts.session) {
     fail("--resume-last and --session are mutually exclusive; pass only one");
   }
@@ -368,6 +413,8 @@ function makeResultWriter(opts, version, run) {
   return (extra) => {
     const result = {
       schema: "delegate-relay.result.v1",
+      lane: opts.lane,
+      laneSource: opts.laneSource,
       tool: "pi",
       workdir: opts.cd,
       provider: opts.provider,

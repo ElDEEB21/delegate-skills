@@ -53,8 +53,9 @@ then see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 A **lane** is a named binding such as “feature → OpenCode, model `grok`, variant `high`.” Config lives at
 `$XDG_CONFIG_HOME/delegate-skills/config.json` when set, otherwise `~/.config/delegate-skills/config.json`
-(global), or `.delegate/config.json` (opt-in per repo). Relays do not yet consume `--lane`; until they
-do, use the map as orchestrator guidance and pass dials as flags.
+(global), or `.delegate/config.json` (opt-in per repo). After setup, dispatch with the matching
+`*-delegate` skill and `--lane <name>` — dials apply from the lane; explicit flags still win; the wrong
+skill for a lane fails loud.
 
 ## Install
 
@@ -151,8 +152,8 @@ Full checklist: [CONTRIBUTING.md](CONTRIBUTING.md).
 This package is intentionally inspectable:
 
 - All skill content is Markdown, plus small Node scripts. Each `*-delegate` skill has exactly one
-  `scripts/relay.mjs`. The `delegate-setup` utility ships `discover.mjs` / `config.mjs` (and a shared
-  implementer table) instead of a relay — it never dispatches coding work.
+  `scripts/relay.mjs`. The `delegate-setup` utility ships `discover.mjs` / `config.mjs` / `lane.mjs`
+  (and a shared implementer table) instead of a relay — it never dispatches coding work.
 - Those scripts make no network calls of their own, read or write no credentials, send no telemetry, and
   have no dependencies (Node built-ins only). Relays launch an implementer CLI and `git`, plus the
   platform process launcher/termination utility where a Windows shim or process-tree kill requires one.
@@ -192,8 +193,9 @@ Per skill — platform, CLI version, and what the run exercised:
   bounded version preflight, missing binary, result parsing, and whole-process-tree timeout/abort
   cleanup. No end-to-end run is recorded here.
 - `delegate-setup` — contract-tested: discover JSON shape, config validate/write/load, whole-lane
-  project overlay, global write without creating `.delegate/`. Live discover against installed CLIs
-  runs in smoke (versions vary by machine). Native Windows discover smoke not yet claimed.
+  project overlay, global write without creating `.delegate/`, and `--lane` resolve / wrong-skill /
+  flag-override against relays. Live discover against installed CLIs runs in smoke (versions vary by
+  machine). Native Windows discover smoke not yet claimed.
 
 Not yet verified: native Windows launches for `agy`, `claude`, `grok`, `kimi`, `pi`, `qoder`, and
 `vibe` (the `codex`/`opencode`/`grok` `.cmd` shim handling is in place and quoted; Cursor serializes a

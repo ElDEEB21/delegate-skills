@@ -65,6 +65,9 @@ node <skill-dir>/scripts/discover.mjs
 node <skill-dir>/scripts/config.mjs load [--cwd <dir>]
 node <skill-dir>/scripts/config.mjs validate <file>
 node <skill-dir>/scripts/config.mjs write --scope global|project [--cwd <dir>] <file>
+node <skill-dir>/scripts/lane.mjs resolve --cwd <dir> --lane <name> --implementer <key>
 ```
 
 `load` prints the **effective** map (each lane includes a `source` of `global` or `project`).
+`lane.mjs resolve` is what `*-delegate` relays call for `--lane`: it fails loud on a missing
+lane or implementer mismatch, and prints relay-native dials (e.g. grok `sandbox` → `autonomy`).

@@ -32,6 +32,7 @@
  * Options:
  *   --brief <file>          Path to the brief. If omitted, the brief is read from stdin.
  *   --cd <dir>              Working root for OpenCode (default: current directory).
+ *   --lane <name>           Fleet lane from delegate-setup config (dials apply; explicit flags win).
  *   --model <name>          Model as provider/model. REQUIRED for a fresh run — OpenCode has no
  *                           safe default; a resumed run inherits its session's model.
  *   --agent <name>          OpenCode agent (default: build). Use plan for read-only review.
@@ -66,14 +67,53 @@
  * file must therefore also treat a non-zero exit with no file as a usage error.
  */
 
-import { spawn, execFileSync } from "node:child_process";
+import {spawn, execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync, appendFileSync } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import {join, resolve, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_483_647;
+
+const IMPLEMENTER_KEY = "opencode";
+
+function applyFleetLane(opts, flagged) {
+  if (!opts.lane) return;
+  const script = join(dirname(fileURLToPath(import.meta.url)), "../../delegate-setup/scripts/lane.mjs");
+  if (!existsSync(script)) {
+    fail("--lane requires the delegate-setup skill installed beside this relay");
+  }
+  const r = spawnSync(
+    process.execPath,
+    [script, "resolve", "--cwd", opts.cd, "--lane", opts.lane, "--implementer", IMPLEMENTER_KEY],
+    { encoding: "utf8", env: process.env },
+  );
+  if (r.error) fail(`lane resolve failed: ${r.error.message}`);
+  if (r.status !== 0) {
+    fail((r.stderr || "lane resolve failed").trim().replace(/^lane\.mjs:\s*/, ""));
+  }
+  let resolved;
+  try {
+    const lines = (r.stdout || "").trim().split("\n").filter(Boolean);
+    resolved = JSON.parse(lines[lines.length - 1]);
+  } catch {
+    fail("lane resolve returned invalid JSON");
+  }
+  opts.laneSource = resolved.source;
+  for (const [field, value] of Object.entries(resolved.dials || {})) {
+    if (flagged.has(field)) continue;
+    if (field === "autonomy" && (flagged.has("autonomy") || flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "agent" && (flagged.has("agent") || flagged.has("readOnly"))) continue;
+    if (field === "sandbox" && (flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "permissionMode" && (flagged.has("permissionMode") || flagged.has("readOnly"))) continue;
+    if (field === "planOnly" && (flagged.has("planOnly") || flagged.has("readOnly"))) continue;
+    if (field === "readOnly" && flagged.has("readOnly")) continue;
+    if (field === "force" && flagged.has("force")) continue;
+    opts[field] = value;
+  }
+}
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -81,7 +121,10 @@ function fail(message, code = 2) {
 }
 
 function parseArgs(argv) {
+  const flagged = new Set();
   const opts = {
+    lane: null,
+    laneSource: null,
     brief: null,
     cd: process.cwd(),
     model: null,
@@ -110,21 +153,23 @@ function parseArgs(argv) {
         break;
       case "--brief": opts.brief = next(); break;
       case "--cd": opts.cd = resolve(next()); break;
-      case "--model": opts.model = next(); break;
-      case "--agent": opts.agent = next(); break;
-      case "--read-only": opts.agent = "plan"; break;
-      case "--variant": opts.variant = next(); break;
+      case "--lane": opts.lane = next(); break;
+      case "--model": opts.model = next(); flagged.add("model"); break;
+      case "--agent": opts.agent = next(); flagged.add("agent"); break;
+      case "--read-only": opts.agent = "plan"; flagged.add("agent"); flagged.add("readOnly"); break;
+      case "--variant": opts.variant = next(); flagged.add("variant"); break;
       case "--auto": opts.auto = true; break;
       case "--no-auto": opts.auto = false; break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--session": opts.session = next(); break;
       case "--pure": opts.pure = true; break;
-      case "--timeout": opts.timeout = next(); break;
+      case "--timeout": opts.timeout = next(); flagged.add("timeout"); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
       default:
         fail(`unknown option: ${arg}`);
     }
   }
+  applyFleetLane(opts, flagged);
   // The watchdog is relay-only (the opencode launch has no timeout flag), so a malformed
   // --timeout must fail loudly here - a silent no-watchdog fallback would be wrong.
   if (opts.timeout !== null && parseDuration(opts.timeout) === null) {
@@ -359,10 +404,13 @@ function makeResultWriter(opts, version, run) {
     const resuming = Boolean(opts.session || opts.resumeLast);
     const result = {
       schema: "delegate-relay.result.v1",
+      lane: opts.lane,
+      laneSource: opts.laneSource,
       tool: "opencode",
       workdir: opts.cd,
       agent: resuming ? "(inherited from resumed session)" : opts.agent,
       model: opts.model,
+      variant: opts.variant,
       auto: opts.auto,
       resumeLast: opts.resumeLast,
       opencodeVersion: version,
