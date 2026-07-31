@@ -245,7 +245,10 @@ function validateModelOrProvider(implementer, field, value, laneName, label) {
   } else if (
     implementer === "grok" ||
     implementer === "pi" ||
-    implementer === "opencode"
+    implementer === "opencode" ||
+    // codex (and any other win32 shell:true relay) must not accept cmd metacharacters in -m.
+    implementer === "codex" ||
+    IMPLEMENTER_BY_KEY[implementer]?.winShell
   ) {
     pattern = MODEL_TOKEN.shellSafe;
     hint = "letters, digits, . _ : / -";

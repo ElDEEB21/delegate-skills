@@ -77,6 +77,9 @@ const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_483_647;
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+// Model reaches cmd.exe on win32 (shell:true for the codex.cmd shim) — same shell-safe
+// family as grok/pi. Keep in lockstep with delegate-setup MODEL_TOKEN.shellSafe.
+const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 const IMPLEMENTER_KEY = "codex";
 
@@ -173,6 +176,9 @@ function parseArgs(argv) {
   }
   if (opts.effort !== null && !/^[a-z][a-z0-9-]*$/i.test(opts.effort)) {
     fail(`invalid --effort "${opts.effort}" (expected a non-empty bare token)`);
+  }
+  if (opts.model !== null && !SAFE_MODEL.test(opts.model)) {
+    fail("--model contains unsupported characters (allowed: letters, digits, . _ : / -)");
   }
   // The watchdog is relay-only (codex has no timeout flag), so a malformed
   // --timeout must fail loudly here - a silent no-watchdog fallback would be wrong.

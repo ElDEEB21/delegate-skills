@@ -1679,6 +1679,28 @@ if (WIN) {
       rejectClaudeModel.status === 2 && /unsupported characters/.test(rejectClaudeModel.stderr),
     );
 
+    const badCodexModel = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "codex", model: "x & whoami" } },
+    };
+    const badCodexModelFile = join(cfgRepo, "bad-codex-model.json");
+    writeFileSync(badCodexModelFile, `${JSON.stringify(badCodexModel)}\n`);
+    const rejectCodexModel = spawnSync(
+      process.execPath,
+      [join(setupDir, "config.mjs"), "validate", badCodexModelFile],
+      { encoding: "utf8", env: process.env },
+    );
+    check(
+      "config validate rejects shell-unsafe codex model",
+      rejectCodexModel.status === 2 && /unsupported characters/.test(rejectCodexModel.stderr),
+    );
+    const unsafeCodexFlag = spawnSync(
+      process.execPath,
+      [relayPath("codex"), "--brief", briefPath, "--model", "x & whoami"],
+      { encoding: "utf8", env: baseEnv },
+    );
+    check("codex relay rejects shell-unsafe --model", unsafeCodexFlag.status === 2);
+
     const badEffort = {
       version: "delegate-fleet.v1",
       lanes: { feature: { implementer: "opencode", model: "opencode/grok", effort: "high" } },
