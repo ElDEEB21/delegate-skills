@@ -374,7 +374,7 @@ function reportVersionFailure(opts, writeResult, run, error, probeTimeoutMs) {
     threadId: null,
     finalMessage: "",
     touchedFiles: gitTouchedFiles(opts.cd),
-    ...(stderr ? { stderrTail: stderr.split("\n").slice(-20) } : {}),
+    stderrTail: stderr ? stderr.split("\n").slice(-20) : [],
     error: message,
   });
   printSummary(result, run.resultPath);

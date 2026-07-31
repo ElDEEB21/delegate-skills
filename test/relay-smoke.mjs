@@ -132,6 +132,8 @@ if (versionProbe && process.env.SMOKE_MODE === "grok-version-fallback-budget") {
   process.exit(0);
 } else if (versionProbe && /-version-hang$/.test(process.env.SMOKE_MODE || "")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+} else if (versionProbe && /-version-fail-silent$/.test(process.env.SMOKE_MODE || "")) {
+  process.exit(7);
 } else if (versionProbe && /-version-fail$/.test(process.env.SMOKE_MODE || "")) {
   console.error("fake version failure");
   process.exit(7);
@@ -297,6 +299,9 @@ class FakeCli {
     if (versionProbe && mode.EndsWith("-version-hang")) {
       Thread.Sleep(Timeout.Infinite);
       return 1;
+    }
+    if (versionProbe && mode.EndsWith("-version-fail-silent")) {
+      return 7;
     }
     if (versionProbe && mode.EndsWith("-version-fail")) {
       Console.Error.WriteLine("fake version failure");
@@ -802,6 +807,7 @@ for (const skill of ["codex", "opencode", "grok", "kimi"]) {
   for (const [suffix, expectedStatus, expectedExit] of [
     ["version-hang", "timeout", 124],
     ["version-fail", "failed", 7],
+    ["version-fail-silent", "failed", 7],
   ]) {
     const outDir = join(scratch, `out-${skill}-${suffix}`);
     const preflight = spawnSync(process.execPath, [
@@ -816,6 +822,7 @@ for (const skill of ["codex", "opencode", "grok", "kimi"]) {
     check(`${skill} preflight: ${skill}-${suffix} is explicit and prevents dispatch`,
       preflight.status === expectedExit &&
       value.status === expectedStatus &&
+      Array.isArray(value.stderrTail) &&
       value.error?.includes("version preflight") &&
       value.error?.includes("was not dispatched"));
   }

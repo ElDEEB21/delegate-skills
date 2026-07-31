@@ -89,8 +89,8 @@ process has exited and `result.json` is written — not when a status line says 
   (`npm i -g @openai/codex`) and `codex login`, then re-dispatch.
 - **an `error` mentioning `version preflight` (`failed`, or `timeout` at exit 124):** the bounded
   `codex --version` probe exited non-zero or hung past its cap (10s, or `--timeout` when shorter), so
-  codex was never dispatched and the working tree is untouched. Check the install by running
-  `codex --version` yourself.
+  codex was never dispatched; only the relay's own artifacts may already exist under `--out-dir`.
+  Check the install by running `codex --version` yourself.
 - **`status: failed`:** read `result.json`'s `stderrTail` and the tail of `eventsPath` for the cause.
   Common causes: an auth lapse, an invalid `--model` or unsupported `--effort`, or a sandbox that
   blocked something the task needed. Fix the cause and re-dispatch; don't paper over it by doing the

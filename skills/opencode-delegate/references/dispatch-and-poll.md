@@ -95,8 +95,8 @@ process has exited and `result.json` is written — not when a status line says 
   (`npm i -g opencode-ai`) and `opencode auth login`, then re-dispatch.
 - **an `error` mentioning `version preflight` (`failed`, or `timeout` at exit 124):** the bounded
   `opencode --version` probe exited non-zero or hung past its cap (10s, or `--timeout` when shorter),
-  so opencode was never dispatched and the working tree is untouched. Check the install by running
-  `opencode --version` yourself.
+  so opencode was never dispatched; only the relay's own artifacts may already exist under
+  `--out-dir`. Check the install by running `opencode --version` yourself.
 - **`status: failed`:** read `result.json`'s `stderrTail` and the tail of `eventsPath` for the cause.
   Common causes: an auth lapse, an unknown `--model` or `--agent`, or a permission the run needed but
   the agent didn't grant. Fix the cause and re-dispatch; don't paper over it by doing the work yourself
