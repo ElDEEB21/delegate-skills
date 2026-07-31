@@ -54,6 +54,7 @@ import { basename, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_TIMEOUT = "30m";
+const MAX_TIMER_MS = 2_147_483_647;
 const VERSION_TIMEOUT_MS = 10_000;
 const MAX_BRIEF_BYTES = (process.platform === "win32" ? 12 : 120) * 1024;
 const PERMISSION_MODES = new Set([
@@ -73,7 +74,17 @@ function fail(message, code = 2) {
 function parseDuration(duration) {
   const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(duration);
   if (!match || (!match[1] && !match[2] && !match[3])) return null;
-  return (Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)) * 1000;
+  try {
+    const seconds =
+      BigInt(match[1] || 0) * 3600n +
+      BigInt(match[2] || 0) * 60n +
+      BigInt(match[3] || 0);
+    const milliseconds = seconds * 1000n;
+    if (milliseconds <= 0n || milliseconds > BigInt(MAX_TIMER_MS)) return null;
+    return Number(milliseconds);
+  } catch {
+    return null;
+  }
 }
 
 function parseArgs(argv) {
@@ -130,9 +141,8 @@ function parseArgs(argv) {
     fail(`unsupported --permission-mode: ${opts.permissionMode}`);
   }
   if (parseDuration(opts.timeout) === null) {
-    fail(`--timeout "${opts.timeout}" is not a duration; use h/m/s strings like 30m, 90s, or 1h30m`);
+    fail(`--timeout "${opts.timeout}" is invalid or too long; use a positive h/m/s duration no longer than about 24 days`);
   }
-  if (parseDuration(opts.timeout) === 0) fail("--timeout must be greater than zero");
   if (!existsSync(opts.cd) || !statSync(opts.cd).isDirectory()) {
     fail(`working directory not found: ${opts.cd}`);
   }
