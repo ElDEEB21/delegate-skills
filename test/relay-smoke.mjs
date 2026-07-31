@@ -1663,6 +1663,22 @@ if (WIN) {
     });
     check("config validate rejects contradictory readOnly+sandbox", rejectConflict.status === 2);
 
+    const badClaudeModel = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "claude", model: "bad model" } },
+    };
+    const badClaudeModelFile = join(cfgRepo, "bad-claude-model.json");
+    writeFileSync(badClaudeModelFile, `${JSON.stringify(badClaudeModel)}\n`);
+    const rejectClaudeModel = spawnSync(
+      process.execPath,
+      [join(setupDir, "config.mjs"), "validate", badClaudeModelFile],
+      { encoding: "utf8", env: process.env },
+    );
+    check(
+      "config validate rejects claude model tokens the relay would reject",
+      rejectClaudeModel.status === 2 && /unsupported characters/.test(rejectClaudeModel.stderr),
+    );
+
     const badEffort = {
       version: "delegate-fleet.v1",
       lanes: { feature: { implementer: "opencode", model: "opencode/grok", effort: "high" } },

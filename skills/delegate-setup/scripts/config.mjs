@@ -33,6 +33,7 @@ import {
   GROK_SANDBOX,
   IMPLEMENTER_BY_KEY,
   LANE_NAME,
+  MODEL_TOKEN,
   QODER_PERMISSION,
   TIMEOUT_RE,
 } from "./implementers.mjs";
@@ -221,6 +222,36 @@ function validateDialValue(implementer, field, value, laneName, label) {
   }
   if (field === "permissionMode" && implementer === "qoder" && !QODER_PERMISSION.includes(value)) {
     return `${label}: lane ${laneName}.permissionMode must be one of: ${QODER_PERMISSION.join(", ")}`;
+  }
+  if (field === "model" || field === "provider") {
+    const modelError = validateModelOrProvider(implementer, field, value, laneName, label);
+    if (modelError) return modelError;
+  }
+  return null;
+}
+
+function validateModelOrProvider(implementer, field, value, laneName, label) {
+  if (implementer === "qoder" && !value.trim()) {
+    return `${label}: lane ${laneName}.${field} must not be empty`;
+  }
+  let pattern = null;
+  let hint = "";
+  if (implementer === "claude") {
+    pattern = MODEL_TOKEN.claude;
+    hint = "letters, digits, . _ : @ / [ ] -";
+  } else if (implementer === "cursor") {
+    pattern = MODEL_TOKEN.cursor;
+    hint = "letters, digits, . _ : @ / [ ] , = -";
+  } else if (
+    implementer === "grok" ||
+    implementer === "pi" ||
+    implementer === "opencode"
+  ) {
+    pattern = MODEL_TOKEN.shellSafe;
+    hint = "letters, digits, . _ : / -";
+  }
+  if (pattern && !pattern.test(value)) {
+    return `${label}: lane ${laneName}.${field} has unsupported characters for ${implementer} (allowed: ${hint})`;
   }
   return null;
 }

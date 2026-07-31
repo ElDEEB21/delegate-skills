@@ -150,6 +150,19 @@ export const QODER_PERMISSION = Object.freeze([
 /** Positive h/m/s duration, same shape relays accept. */
 export const TIMEOUT_RE = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/;
 
+/**
+ * Model/provider token shapes mirrored from each relay's parseArgs.
+ * Relays that do not constrain the string still get a non-empty check in config.mjs.
+ */
+export const MODEL_TOKEN = Object.freeze({
+  /** Keep in lockstep with claude-delegate SAFE_MODEL. */
+  claude: /^[A-Za-z0-9][A-Za-z0-9._:@\/\[\]-]*$/,
+  /** Keep in lockstep with cursor-delegate SAFE_MODEL. */
+  cursor: /^[A-Za-z0-9][A-Za-z0-9._:@\/\[\]\,=-]*$/,
+  /** Keep in lockstep with grok/pi shell-safe tokens (also used for opencode). */
+  shellSafe: /^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/,
+});
+
 export const CONFIG_VERSION = "delegate-fleet.v1";
 export const LANE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export const ALL_DIALS = Object.freeze([
