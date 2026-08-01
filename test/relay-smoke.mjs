@@ -1639,6 +1639,22 @@ if (WIN) {
     });
     check("config validate requires provider/model for opencode", rejectBareModel.status === 2);
 
+    const emptyOpenCodeModel = {
+      version: "delegate-fleet.v1",
+      lanes: { feature: { implementer: "opencode", model: "opencode/" } },
+    };
+    const emptyOpenCodeModelFile = join(cfgRepo, "empty-opencode-model.json");
+    writeFileSync(emptyOpenCodeModelFile, `${JSON.stringify(emptyOpenCodeModel)}\n`);
+    const rejectEmptyOpenCodeModel = spawnSync(
+      process.execPath,
+      [join(setupDir, "config.mjs"), "validate", emptyOpenCodeModelFile],
+      { encoding: "utf8", env: process.env },
+    );
+    check(
+      "config validate requires text after the opencode provider separator",
+      rejectEmptyOpenCodeModel.status === 2 && /provider\/model/.test(rejectEmptyOpenCodeModel.stderr),
+    );
+
     const hugeTimeout = {
       version: "delegate-fleet.v1",
       lanes: { slow: { implementer: "kimi", timeout: "999999999h" } },
@@ -1958,6 +1974,28 @@ if (WIN) {
     };
     const projectFile = join(cfgRepo, "project-lanes.json");
     writeFileSync(projectFile, `${JSON.stringify(projectOnly, null, 2)}\n`);
+
+    const untrustedProject = {
+      version: "delegate-fleet.v1",
+      lanes: {
+        feature: { implementer: "codex", sandbox: "danger-full-access" },
+      },
+    };
+    mkdirSync(join(cfgRepo, ".delegate"), { recursive: true });
+    writeFileSync(
+      join(cfgRepo, ".delegate", "config.json"),
+      `${JSON.stringify(untrustedProject, null, 2)}\n`,
+    );
+    const rejectUntrustedProject = spawnSync(
+      process.execPath,
+      [join(setupDir, "lane.mjs"), "resolve", "--cwd", cfgRepo, "--lane", "feature", "--implementer", "codex"],
+      { encoding: "utf8", env: process.env },
+    );
+    check(
+      "lane resolve: cloned project config fails closed until approved",
+      rejectUntrustedProject.status === 2 && /project fleet config is not trusted/.test(rejectUntrustedProject.stderr),
+    );
+
     const writeProject = spawnSync(
       process.execPath,
       [join(setupDir, "config.mjs"), "write", "--scope", "project", "--cwd", cfgRepo, projectFile],
@@ -1965,6 +2003,10 @@ if (WIN) {
     );
     check("config write --scope project", writeProject.status === 0);
     check("project config file created", existsSync(join(cfgRepo, ".delegate", "config.json")));
+    check(
+      "project config approval hash lives under git metadata",
+      existsSync(join(cfgRepo, ".git", "delegate-skills", "project-config.sha256")),
+    );
 
     // Symlinked .delegate must not escape the repo.
     const escapeRepo = join(fleetRoot, "escape-repo");
@@ -2008,7 +2050,8 @@ if (WIN) {
       "effective feature lane is project (whole-lane replace)",
       effective?.lanes?.feature?.implementer === "claude" &&
         effective?.lanes?.feature?.source === "project" &&
-        effective?.lanes?.feature?.effort === "high",
+        effective?.lanes?.feature?.effort === "high" &&
+        effective?.projectTrusted === true,
     );
     check(
       "effective tests lane falls through to global",
@@ -2039,6 +2082,20 @@ if (WIN) {
     check(
       "relay --lane: project overlay remaps implementer (opencode fails)",
       afterOverlay.status === 2 && /use claude-delegate/.test(afterOverlay.stderr),
+    );
+
+    writeFileSync(
+      join(cfgRepo, ".delegate", "config.json"),
+      `${JSON.stringify(untrustedProject, null, 2)}\n`,
+    );
+    const rejectChangedProject = spawnSync(
+      process.execPath,
+      [join(setupDir, "lane.mjs"), "resolve", "--cwd", cfgRepo, "--lane", "feature", "--implementer", "codex"],
+      { encoding: "utf8", env: process.env },
+    );
+    check(
+      "lane resolve: project config changes invalidate approval",
+      rejectChangedProject.status === 2 && /project fleet config is not trusted/.test(rejectChangedProject.stderr),
     );
   } finally {
     if (prevHome === undefined) delete process.env.HOME;

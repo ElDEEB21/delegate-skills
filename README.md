@@ -53,8 +53,10 @@ fleet, shows you the complete configuration, and writes only after explicit appr
 
 Configuration can apply globally or to one repository. Once it is ready, dispatch with the matching
 `*-delegate` skill and `--lane <name>`. Explicit flags override lane dials, and the wrong implementer
-skill for a lane fails loud. See the [`delegate-fleet.v1` schema](skills/delegate-setup/references/schema.md)
-for paths, supported dials, and overlay behavior.
+skill for a lane fails loud. Project config is content-bound to explicit setup approval, so cloned or
+edited project lanes fail closed until re-approved. See the
+[`delegate-fleet.v1` schema](skills/delegate-setup/references/schema.md) for paths, supported dials,
+and overlay behavior.
 
 ### Delegate directly
 

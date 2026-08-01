@@ -64,6 +64,8 @@ node "<skill-dir>/scripts/config.mjs" load --cwd "$PWD"
 - Neither present → “No lanes configured yet.”
 - Otherwise → table of **effective** lanes with a Source column (`global` / `project`). Do not paste
   both raw files unless asked.
+- If `projectPresent` is true and `projectTrusted` is false, label the project lanes **untrusted**.
+  They cannot dispatch until the user reviews and approves a project write.
 
 Details: [references/setup-dialogue.md](references/setup-dialogue.md).
 
@@ -105,7 +107,9 @@ node "<skill-dir>/scripts/config.mjs" write --scope global "<lanes-json>"
 # or:  write --scope project --cwd /path/to/repo "<lanes-json>"
 ```
 
-Confirm the path written and the active lane names. On update, a short before/after is enough.
+Confirm the path written and the active lane names. A project write also records an approval hash
+under that worktree's Git metadata; changing `.delegate/config.json` invalidates approval and makes
+project lanes fail closed until the next approved project write. On update, a short before/after is enough.
 
 ### 6. Hand-off
 

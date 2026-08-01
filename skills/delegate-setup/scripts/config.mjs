@@ -25,6 +25,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   ALL_DIALS,
   CLAUDE_EFFORT,
@@ -78,6 +79,16 @@ export function projectConfigPath(cwd) {
   const root = findGitRoot(cwd);
   if (!root) return null;
   return join(root, ".delegate", "config.json");
+}
+
+function projectTrustPath(cwd) {
+  const r = spawnSync("git", ["-C", cwd, "rev-parse", "--absolute-git-dir"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (r.status !== 0) return null;
+  const gitDir = (r.stdout || "").trim();
+  return gitDir ? join(gitDir, "delegate-skills", "project-config.sha256") : null;
 }
 
 function fail(message) {
@@ -149,7 +160,8 @@ function validateLane(name, lane, label) {
     if (typeof lane.model !== "string" || !lane.model) {
       return `${label}: lane ${name}: opencode requires model (provider/model)`;
     }
-    if (!lane.model.includes("/")) {
+    const separator = lane.model.indexOf("/");
+    if (separator <= 0 || separator === lane.model.length - 1) {
       return `${label}: lane ${name}.model must be provider/model (e.g. opencode/grok)`;
     }
   }
@@ -299,6 +311,23 @@ export function readConfigFile(path) {
   return { path, document: parsed.document };
 }
 
+function configFileDigest(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function projectConfigTrusted(cwd, configPath = projectConfigPath(cwd)) {
+  const trustPath = projectTrustPath(cwd);
+  if (!configPath || !trustPath || !existsSync(configPath) || !existsSync(trustPath)) return false;
+  return readFileSync(trustPath, "utf8").trim() === configFileDigest(configPath);
+}
+
+function trustProjectConfig(cwd, configPath) {
+  const trustPath = projectTrustPath(cwd);
+  if (!trustPath) throw new Error("project scope requires writable git metadata");
+  mkdirSync(dirname(trustPath), { recursive: true });
+  writeFileSync(trustPath, `${configFileDigest(configPath)}\n`, "utf8");
+}
+
 /**
  * Effective lanes: start from global, whole-lane replace from project.
  */
@@ -323,6 +352,7 @@ export function loadEffective(cwd = process.cwd()) {
   const projectPath = projectConfigPath(cwd);
   const globalFile = readConfigFile(globalPath);
   const projectFile = projectPath ? readConfigFile(projectPath) : null;
+  const projectTrusted = Boolean(projectFile && projectConfigTrusted(cwd, projectPath));
   const effective = effectiveLanes(globalFile?.document, projectFile?.document);
   return {
     version: CONFIG_VERSION,
@@ -330,6 +360,7 @@ export function loadEffective(cwd = process.cwd()) {
     projectPath,
     globalPresent: Boolean(globalFile),
     projectPresent: Boolean(projectFile),
+    projectTrusted,
     lanes: Object.fromEntries(
       Object.entries(effective).map(([name, { lane, source }]) => [
         name,
@@ -382,7 +413,9 @@ function main(argv) {
     }
 
     if (cmd === "validate") {
-      const file = argv.find((a, i) => i > 0 && a !== "--cwd" && argv[i - 1] !== "--cwd");
+      const file = argv.find(
+        (a, i) => i > 0 && !a.startsWith("--") && argv[i - 1] !== "--cwd",
+      );
       if (!file) fail("validate needs a file path");
       const parsed = parseConfigDocument(readFileSync(resolve(file), "utf8"), file);
       if (!parsed.ok) fail(parsed.error);
@@ -400,12 +433,18 @@ function main(argv) {
         return i > 0;
       }).at(-1);
       if (!file) fail("write needs a JSON file path");
-      const target =
-        scope === "global" ? globalConfigPath() : assertSafeProjectConfigPath(cwd);
       const parsed = parseConfigDocument(readFileSync(resolve(file), "utf8"), file);
       if (!parsed.ok) fail(parsed.error);
+      const target =
+        scope === "global" ? globalConfigPath() : assertSafeProjectConfigPath(cwd);
       writeAtomic(target, parsed.document);
-      process.stdout.write(`${JSON.stringify({ ok: true, path: target, lanes: Object.keys(parsed.document.lanes) }, null, 2)}\n`);
+      if (scope === "project") trustProjectConfig(cwd, target);
+      process.stdout.write(`${JSON.stringify({
+        ok: true,
+        path: target,
+        lanes: Object.keys(parsed.document.lanes),
+        ...(scope === "project" ? { projectTrusted: true } : {}),
+      }, null, 2)}\n`);
       return;
     }
 

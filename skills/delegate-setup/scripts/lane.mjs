@@ -53,6 +53,11 @@ export function resolveLaneForRelay(cwd, laneName, implementerKey) {
     throw new Error(`fleet lane not found: ${laneName}`);
   }
   const { source, implementer, ...rest } = entry;
+  if (source === "project" && !effective.projectTrusted) {
+    throw new Error(
+      "project fleet config is not trusted; review and approve it with delegate-setup before dispatch",
+    );
+  }
   if (implementer !== implementerKey) {
     const bound = IMPLEMENTER_BY_KEY[implementer];
     throw new Error(

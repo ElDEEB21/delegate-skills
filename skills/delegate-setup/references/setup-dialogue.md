@@ -9,7 +9,9 @@ When loading existing config:
 1. Run `node <skill-dir>/scripts/config.mjs load --cwd <dir>` (use the user’s cwd, or omit `--cwd`).
 2. If `globalPresent` and `projectPresent` are both false → say “No lanes configured yet.”
 3. Otherwise show a **table of effective lanes** from the `lanes` object. Include a Source column (`global` / `project`).
-4. Paste both raw JSON files only if the user asks.
+4. If `projectPresent` is true and `projectTrusted` is false, mark project lanes untrusted and explain
+   that they cannot dispatch until the user approves a project write.
+5. Paste both raw JSON files only if the user asks.
 
 ## Scope
 
@@ -44,7 +46,9 @@ node <skill-dir>/scripts/config.mjs write --scope project --cwd <repo> "$LANES_J
 ```
 
 Prefer a temp JSON file then `write`, or write atomically yourself with the same schema checks.
-Re-read with `load` and confirm the path. Do not hard-code `/tmp` (breaks on native Windows).
+Re-read with `load` and confirm the path. A project write stores an approval hash under the worktree's
+Git metadata; any later content change invalidates it and project lane dispatch fails closed until
+re-approved. Do not hard-code `/tmp` (breaks on native Windows).
 
 ## Auth and models
 

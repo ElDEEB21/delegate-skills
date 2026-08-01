@@ -38,6 +38,9 @@ One concept: **lanes**. A lane names an implementer and optional dials.
 | Project | `<git-root>/.delegate/config.json` |
 
 Project overlays global by **whole-lane replace** (same lane name in project fully replaces the global lane).
+Relays apply a project lane only when its exact config content matches the approval hash written under
+that worktree's Git metadata by an explicitly approved `config.mjs write --scope project`. Cloned or
+later-edited project config fails closed until it is reviewed and written again through `delegate-setup`.
 
 ## Implementer keys and dials
 
@@ -55,7 +58,7 @@ Project overlays global by **whole-lane replace** (same lane name in project ful
 | `pi` | pi-delegate | `pi` | provider, model, timeout, readOnly |
 
 OpenCode uses `variant` for reasoning intensity, not `effort`. Do not write `effort` on an `opencode` lane.
-OpenCode lanes **require** `model` in `provider/model` form (a bare name is rejected).
+OpenCode lanes **require** `model` in `provider/model` form, with text on both sides of the first `/`.
 
 Boolean dials: `readOnly`, `force`. All other dials are non-empty strings. Duration strings for
 `timeout` use `h`/`m`/`s` (e.g. `30m`) and must fit the relay watchdog ceiling (~24.8 days).
@@ -73,6 +76,8 @@ node <skill-dir>/scripts/config.mjs write --scope global|project [--cwd <dir>] <
 node <skill-dir>/scripts/lane.mjs resolve --cwd <dir> --lane <name> --implementer <key>
 ```
 
-`load` prints the **effective** map (each lane includes a `source` of `global` or `project`).
+`load` prints the **effective** map (each lane includes a `source` of `global` or `project`) and
+`projectTrusted`, which reports whether the current project content matches its local approval hash.
 `lane.mjs resolve` is what `*-delegate` relays call for `--lane`: it fails loud on a missing
-lane or implementer mismatch, and prints relay-native dials (e.g. grok `sandbox` → `autonomy`).
+lane, untrusted project config, or implementer mismatch, and prints relay-native dials
+(e.g. grok `sandbox` → `autonomy`).
