@@ -1574,6 +1574,21 @@ if (WIN) {
     report && report.discovered.length + report.missing.length === SKILLS.length,
   );
 
+  const agyProbeDir = join(scratch, "discover-agy");
+  mkdirSync(agyProbeDir);
+  const agyProbePath = join(agyProbeDir, WIN ? "agy.cmd" : "agy");
+  writeFileSync(agyProbePath, WIN ? "@echo 1.2.3:\r\n" : "#!/bin/sh\nprintf '1.2.3:\\n'\n");
+  if (!WIN) chmodSync(agyProbePath, 0o755);
+  const agyDiscover = spawnSync(process.execPath, [join(setupDir, "discover.mjs")], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: agyProbeDir },
+  });
+  const agyReport = agyDiscover.status === 0 ? JSON.parse(agyDiscover.stdout) : null;
+  check(
+    "Agy changelog heading reports the bare version",
+    agyReport?.discovered.find(({ key }) => key === "agy")?.version === "1.2.3",
+  );
+
   // Keep fixtures inside the repo tree so sandboxed CI/dev runs can write; seed a
   // minimal .git without `git init` (hooks/config writes are often blocked).
   const fleetRoot = mkdtempSync(join(here, "..", ".tmp-fleet-smoke-"));

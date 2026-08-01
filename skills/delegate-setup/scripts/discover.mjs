@@ -100,7 +100,10 @@ function probeVersion(impl, binaryPath) {
   const tryArgs = (versionArgs) => {
     try {
       const raw = runProbe(binaryPath, versionArgs, useShell);
-      return raw.trim().split("\n")[0].trim() || null;
+      const firstLine = raw.trim().split(/\r?\n/, 1)[0].trim();
+      if (!firstLine) return null;
+      if (impl.versionFormat !== "colon-prefix") return firstLine;
+      return /^([^:\s]+):/.exec(firstLine)?.[1] ?? firstLine;
     } catch {
       return null;
     }
