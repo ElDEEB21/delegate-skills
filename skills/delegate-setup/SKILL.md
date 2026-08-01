@@ -93,7 +93,7 @@ Schema and dial table: [references/schema.md](references/schema.md).
 
 ### 5. Approve and write
 
-On explicit yes, write **only** the chosen path (validate first). Build the payload from that
+On explicit yes, write **only** the chosen scope (validate first). Build the payload from that
 scope’s raw file (or an empty `lanes` object if new) — not from the effective merged `load` view,
 or a project write will shadow global-only lanes and a global write will promote project-only ones.
 
@@ -107,9 +107,8 @@ node "<skill-dir>/scripts/config.mjs" write --scope global "<lanes-json>"
 # or:  write --scope project --cwd /path/to/repo "<lanes-json>"
 ```
 
-Confirm the path written and the active lane names. A project write also records an approval hash
-under that worktree's Git metadata; changing `.delegate/config.json` invalidates approval and makes
-project lanes fail closed until the next approved project write. On update, a short before/after is enough.
+Confirm the path written and the active lane names. Project writes bind approval to the exact config
+content; later changes fail closed until re-approved. On update, a short before/after is enough.
 
 ### 6. Hand-off
 

@@ -1639,21 +1639,27 @@ if (WIN) {
     });
     check("config validate requires provider/model for opencode", rejectBareModel.status === 2);
 
-    const emptyOpenCodeModel = {
-      version: "delegate-fleet.v1",
-      lanes: { feature: { implementer: "opencode", model: "opencode/" } },
-    };
-    const emptyOpenCodeModelFile = join(cfgRepo, "empty-opencode-model.json");
-    writeFileSync(emptyOpenCodeModelFile, `${JSON.stringify(emptyOpenCodeModel)}\n`);
-    const rejectEmptyOpenCodeModel = spawnSync(
-      process.execPath,
-      [join(setupDir, "config.mjs"), "validate", emptyOpenCodeModelFile],
-      { encoding: "utf8", env: process.env },
-    );
-    check(
-      "config validate requires text after the opencode provider separator",
-      rejectEmptyOpenCodeModel.status === 2 && /provider\/model/.test(rejectEmptyOpenCodeModel.stderr),
-    );
+    for (const [model, boundary] of [
+      ["opencode/", "after"],
+      ["/grok", "before"],
+      ["opencode//", "after"],
+    ]) {
+      const malformedModel = {
+        version: "delegate-fleet.v1",
+        lanes: { feature: { implementer: "opencode", model } },
+      };
+      const malformedModelFile = join(cfgRepo, `malformed-opencode-model-${boundary}-${model.length}.json`);
+      writeFileSync(malformedModelFile, `${JSON.stringify(malformedModel)}\n`);
+      const rejected = spawnSync(
+        process.execPath,
+        [join(setupDir, "config.mjs"), "validate", malformedModelFile],
+        { encoding: "utf8", env: process.env },
+      );
+      check(
+        `config validate requires model text ${boundary} the opencode provider separator (${model})`,
+        rejected.status === 2,
+      );
+    }
 
     const hugeTimeout = {
       version: "delegate-fleet.v1",

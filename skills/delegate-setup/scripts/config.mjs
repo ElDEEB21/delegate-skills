@@ -161,7 +161,7 @@ function validateLane(name, lane, label) {
       return `${label}: lane ${name}: opencode requires model (provider/model)`;
     }
     const separator = lane.model.indexOf("/");
-    if (separator <= 0 || separator === lane.model.length - 1) {
+    if (separator <= 0 || !/[^/]/.test(lane.model.slice(separator + 1))) {
       return `${label}: lane ${name}.model must be provider/model (e.g. opencode/grok)`;
     }
   }
@@ -306,26 +306,27 @@ export function assertSafeProjectConfigPath(cwd) {
 
 export function readConfigFile(path) {
   if (!path || !existsSync(path)) return null;
-  const parsed = parseConfigDocument(readFileSync(path, "utf8"), path);
+  const raw = readFileSync(path);
+  const parsed = parseConfigDocument(raw.toString("utf8"), path);
   if (!parsed.ok) throw new Error(parsed.error);
-  return { path, document: parsed.document };
+  return { path, document: parsed.document, digest: configDigest(raw) };
 }
 
-function configFileDigest(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+function configDigest(raw) {
+  return createHash("sha256").update(raw).digest("hex");
 }
 
-function projectConfigTrusted(cwd, configPath = projectConfigPath(cwd)) {
+function projectConfigTrusted(cwd, digest) {
   const trustPath = projectTrustPath(cwd);
-  if (!configPath || !trustPath || !existsSync(configPath) || !existsSync(trustPath)) return false;
-  return readFileSync(trustPath, "utf8").trim() === configFileDigest(configPath);
+  if (!digest || !trustPath || !existsSync(trustPath)) return false;
+  return readFileSync(trustPath, "utf8").trim() === digest;
 }
 
-function trustProjectConfig(cwd, configPath) {
+function trustProjectConfig(cwd, digest) {
   const trustPath = projectTrustPath(cwd);
   if (!trustPath) throw new Error("project scope requires writable git metadata");
   mkdirSync(dirname(trustPath), { recursive: true });
-  writeFileSync(trustPath, `${configFileDigest(configPath)}\n`, "utf8");
+  writeFileSync(trustPath, `${digest}\n`, "utf8");
 }
 
 /**
@@ -352,7 +353,7 @@ export function loadEffective(cwd = process.cwd()) {
   const projectPath = projectConfigPath(cwd);
   const globalFile = readConfigFile(globalPath);
   const projectFile = projectPath ? readConfigFile(projectPath) : null;
-  const projectTrusted = Boolean(projectFile && projectConfigTrusted(cwd, projectPath));
+  const projectTrusted = Boolean(projectFile && projectConfigTrusted(cwd, projectFile.digest));
   const effective = effectiveLanes(globalFile?.document, projectFile?.document);
   return {
     version: CONFIG_VERSION,
@@ -379,8 +380,9 @@ export function writeAtomic(targetPath, document) {
     dirname(targetPath),
     `.config.${process.pid}.${Date.now()}.tmp`,
   );
+  const raw = `${JSON.stringify(parsed.document, null, 2)}\n`;
   try {
-    writeFileSync(tmp, `${JSON.stringify(parsed.document, null, 2)}\n`, "utf8");
+    writeFileSync(tmp, raw, "utf8");
     renameSync(tmp, targetPath);
   } catch (error) {
     try {
@@ -390,6 +392,7 @@ export function writeAtomic(targetPath, document) {
     }
     throw error;
   }
+  return configDigest(raw);
 }
 
 function main(argv) {
@@ -437,8 +440,8 @@ function main(argv) {
       if (!parsed.ok) fail(parsed.error);
       const target =
         scope === "global" ? globalConfigPath() : assertSafeProjectConfigPath(cwd);
-      writeAtomic(target, parsed.document);
-      if (scope === "project") trustProjectConfig(cwd, target);
+      const writtenDigest = writeAtomic(target, parsed.document);
+      if (scope === "project") trustProjectConfig(cwd, writtenDigest);
       process.stdout.write(`${JSON.stringify({
         ok: true,
         path: target,

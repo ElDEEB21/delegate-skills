@@ -45,8 +45,8 @@ node <skill-dir>/scripts/config.mjs write --scope global "$LANES_JSON"
 node <skill-dir>/scripts/config.mjs write --scope project --cwd <repo> "$LANES_JSON"
 ```
 
-Prefer a temp JSON file then `write`, or write atomically yourself with the same schema checks.
-Re-read with `load` and confirm the path. A project write stores an approval hash under the worktree's
+Use the `config.mjs write` command above so project approval is recorded correctly. Re-read with
+`load` and confirm the path. A project write stores an approval hash under the worktree's
 Git metadata; any later content change invalidates it and project lane dispatch fails closed until
 re-approved. Do not hard-code `/tmp` (breaks on native Windows).
 

@@ -58,7 +58,8 @@ later-edited project config fails closed until it is reviewed and written again 
 | `pi` | pi-delegate | `pi` | provider, model, timeout, readOnly |
 
 OpenCode uses `variant` for reasoning intensity, not `effort`. Do not write `effort` on an `opencode` lane.
-OpenCode lanes **require** `model` in `provider/model` form, with text on both sides of the first `/`.
+OpenCode lanes **require** `model` in `provider/model` form, with a non-empty provider before the first
+`/` and at least one non-`/` character after it.
 
 Boolean dials: `readOnly`, `force`. All other dials are non-empty strings. Duration strings for
 `timeout` use `h`/`m`/`s` (e.g. `30m`) and must fit the relay watchdog ceiling (~24.8 days).
