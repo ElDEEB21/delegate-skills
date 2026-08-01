@@ -4,7 +4,7 @@
 [![skills.sh](https://www.skills.sh/b/amElnagdy/delegate-skills)](https://www.skills.sh/amElnagdy/delegate-skills)
 [![License](https://img.shields.io/github/license/amElnagdy/delegate-skills)](LICENSE)
 
-**Create your fleet of coding agents. One orchestrator, the right implementer for every job.**
+**Create your fleet of lanes. One orchestrator, the right implementer for every job.**
 
 Discover the implementer CLIs already installed on your machine, organize them into lanes like
 `feature`, `tests`, and `ui`, then delegate by lane — or choose one implementer directly. Either way,

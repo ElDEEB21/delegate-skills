@@ -110,7 +110,7 @@ node "<skill-dir>/scripts/config.mjs" write --scope global "<lanes-json>"
 Confirm the path written and the active lane names. Project writes bind approval to the exact config
 content; later changes fail closed until re-approved. On update, a short before/after is enough.
 
-### 6. Hand-off
+### 6. Ready to delegate
 
 Stop after confirming. Tell the user the map is ready. For later work: read the lane’s
 `implementer`, load that `*-delegate` skill, and dispatch with `--lane <name>` (explicit
