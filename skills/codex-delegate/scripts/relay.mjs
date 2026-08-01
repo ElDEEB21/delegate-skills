@@ -35,7 +35,7 @@
  *                           (default: workspace-write).
  *   --read-only             Shortcut for --sandbox read-only (review/diagnosis, no edits).
  *   --resume-last           Continue the most recent Codex session; send only the delta brief.
- *                           (Inherits the original session's sandbox and working root.)
+ *                           An explicit --sandbox/--read-only override applies to the resumed turn.
  *   --session <id>          Continue a specific Codex session by thread id (from a prior
  *                           result.json). Safer than --resume-last when other Codex runs
  *                           may have happened since - "last" is global, not per-repo.
@@ -116,6 +116,7 @@ function applyFleetLane(opts, flagged) {
     if (field === "readOnly" && flagged.has("readOnly")) continue;
     if (field === "force" && flagged.has("force")) continue;
     opts[field] = value;
+    if (field === "sandbox") opts.sandboxConfigured = true;
   }
 }
 
@@ -134,6 +135,7 @@ function parseArgs(argv) {
     model: null,
     effort: null,
     sandbox: "workspace-write",
+    sandboxConfigured: false,
     resumeLast: false,
     session: null,
     skipGitRepoCheck: false,
@@ -159,8 +161,8 @@ function parseArgs(argv) {
       case "--lane": opts.lane = next(); break;
       case "--model": opts.model = next(); flagged.add("model"); break;
       case "--effort": opts.effort = next(); flagged.add("effort"); break;
-      case "--sandbox": opts.sandbox = next(); flagged.add("sandbox"); break;
-      case "--read-only": opts.sandbox = "read-only"; flagged.add("sandbox"); flagged.add("readOnly"); break;
+      case "--sandbox": opts.sandbox = next(); opts.sandboxConfigured = true; flagged.add("sandbox"); break;
+      case "--read-only": opts.sandbox = "read-only"; opts.sandboxConfigured = true; flagged.add("sandbox"); flagged.add("readOnly"); break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--session": opts.session = next(); break;
       case "--skip-git-repo-check": opts.skipGitRepoCheck = true; break;
@@ -314,6 +316,10 @@ function timestamp() {
 
 function buildArgv(opts, finalPath) {
   const argv = ["exec"];
+  const resuming = Boolean(opts.session || opts.resumeLast);
+  // Codex accepts shared exec options before the resume subcommand. Reapply only
+  // an explicitly selected sandbox; otherwise leave the active Codex config alone.
+  if (resuming && opts.sandboxConfigured) argv.push("-s", opts.sandbox);
   if (opts.session) argv.push("resume", opts.session);
   else if (opts.resumeLast) argv.push("resume", "--last");
   // ponytail: shell:true on win32 (needed for the codex.cmd shim) doesn't quote
@@ -322,14 +328,12 @@ function buildArgv(opts, finalPath) {
   // Ceiling: if quoting proves too blunt, drop shell:true and resolve the shim.
   const outPath = process.platform === "win32" ? `"${finalPath}"` : finalPath;
   argv.push("--json", "-o", outPath);
-  // `-s`/`-C` are not accepted by `exec resume`; resume inherits the original
-  // session's sandbox and working root, and we set the child process cwd below.
-  if (!opts.resumeLast && !opts.session) {
+  if (!resuming) {
     argv.push("-s", opts.sandbox);
   }
   if (opts.model) argv.push("-m", opts.model);
-  // `-c` is accepted by `exec resume` (unlike `-s`/`-C`), so the effort override
-  // applies to fresh and resumed runs alike.
+  // `-c` is accepted by the resume subcommand, so the effort override applies to
+  // fresh and resumed runs alike.
   if (opts.effort !== null) argv.push("-c", `model_reasoning_effort=${opts.effort}`);
   if (opts.skipGitRepoCheck) argv.push("--skip-git-repo-check");
   argv.push("-"); // read the prompt from stdin
@@ -380,12 +384,13 @@ function makeResultWriter(opts, version, run) {
   // standing metadata, persists result.json, and returns the object it just
   // wrote so the caller can hand it straight to printSummary.
   return (extra) => {
+    const resuming = Boolean(opts.resumeLast || opts.session);
     const result = {
       schema: "delegate-relay.result.v1",
       lane: opts.lane,
       laneSource: opts.laneSource,
       workdir: opts.cd,
-      sandbox: opts.resumeLast || opts.session ? "(inherited from resumed session)" : opts.sandbox,
+      sandbox: !resuming || opts.sandboxConfigured ? opts.sandbox : "(Codex config on resume)",
       model: opts.model,
       effort: opts.effort,
       resumeLast: opts.resumeLast,

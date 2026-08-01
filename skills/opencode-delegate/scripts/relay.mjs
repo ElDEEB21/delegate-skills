@@ -307,15 +307,14 @@ function buildArgv(opts) {
   const argv = ["run", "--format", "json"];
   if (opts.pure) argv.push("--pure");
   // Resume continues an existing session; --session pins a specific id, otherwise
-  // --continue picks up the most recent one. A resumed run inherits its original
-  // agent, so we only set --agent on a fresh run.
+  // --continue picks up the most recent one. OpenCode selects the agent for each
+  // prompt, so preserve the relay's requested autonomy on resumed turns too.
   if (opts.session) {
     argv.push("--session", opts.session);
   } else if (opts.resumeLast) {
     argv.push("--continue");
-  } else {
-    argv.push("--agent", opts.agent);
   }
+  argv.push("--agent", opts.agent);
   if (opts.model) argv.push("--model", opts.model);
   if (opts.variant) argv.push("--variant", opts.variant);
   // --auto (on by default) auto-approves permissions so a headless build run doesn't
@@ -417,10 +416,11 @@ function makeResultWriter(opts, version, run) {
       laneSource: opts.laneSource,
       tool: "opencode",
       workdir: opts.cd,
-      agent: resuming ? "(inherited from resumed session)" : opts.agent,
+      agent: opts.agent,
       model: opts.model,
       variant: opts.variant,
       auto: opts.auto,
+      resumed: resuming,
       resumeLast: opts.resumeLast,
       opencodeVersion: version,
       startedAt: run.startedAt,
@@ -679,7 +679,7 @@ function printSummary(result, resultPath) {
   lines.push(`relay: ${result.status} (exit ${result.exitCode}${result.signal ? `, killed by ${result.signal}` : ""})  ·  opencode ${result.opencodeVersion ?? "?"}`);
   if (result.signal === "SIGKILL" && result.status === "failed") lines.push("hint: the host killed the process (commonly the OOM killer or a supervisor timeout) — this is not an opencode error; check host memory and re-dispatch, or split the task into smaller briefs.");
   if (result.signal === "SIGTERM" && result.status === "failed") lines.push("hint: something outside the relay terminated opencode (a supervisor, the session ending, or a manual kill) — when the relay itself does the killing it reports status \"timeout\" or \"aborted\" instead; inspect the working tree before re-dispatching.");
-  if (result.resumeLast || result.agent === "(inherited from resumed session)") lines.push("mode: resumed existing session");
+  if (result.resumed) lines.push("mode: resumed existing session");
   if (result.sessionId) lines.push(`session id (resume with: --session ${result.sessionId}): ${result.sessionId}`);
   if (typeof result.cost === "number") lines.push(`cost: $${result.cost}`);
   const touched = result.touchedFiles;

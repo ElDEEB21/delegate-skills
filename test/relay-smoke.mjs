@@ -453,7 +453,7 @@ const sessionRun = spawnSync(process.execPath,
 const sessionArgs = existsSync(sessionArgsFile) ? JSON.parse(readFileSync(sessionArgsFile, "utf8")) : [];
 check("codex session: resumes the named thread",
   sessionRun.status === 0 && sessionArgs[0] === "exec" && sessionArgs[1] === "resume" && sessionArgs[2] === "thread-abc");
-check("codex session: no -s on a resume (exec resume rejects it)", !sessionArgs.includes("-s"));
+check("codex session: an unqualified resume leaves the active Codex sandbox config alone", !sessionArgs.includes("-s"));
 check("codex session: recorded in result.json",
   existsSync(join(sessionOutDir, "result.json")) && result(sessionOutDir).session === "thread-abc");
 const bothResumeRun = spawnSync(process.execPath,
@@ -1604,6 +1604,8 @@ if (WIN) {
       lanes: {
         feature: { implementer: "opencode", model: "opencode/grok", variant: "high" },
         tests: { implementer: "grok", effort: "medium" },
+        "codex-review": { implementer: "codex", readOnly: true },
+        "opencode-review": { implementer: "opencode", model: "opencode/grok", readOnly: true },
       },
     };
     const goodFile = join(cfgRepo, "lanes.json");
@@ -1934,6 +1936,61 @@ if (WIN) {
         result(laneOut).laneSource === "global" &&
         result(laneOut).model === "opencode/grok" &&
         result(laneOut).variant === "high");
+
+    const codexResumeOut = join(cfgRepo, "out-lane-codex-resume");
+    const codexResumeArgsFile = join(cfgRepo, "args-lane-codex-resume.json");
+    mkdirSync(codexResumeOut, { recursive: true });
+    const codexResume = spawnSync(
+      process.execPath,
+      [
+        relayPath("codex"),
+        "--brief", laneBrief,
+        "--cd", cfgRepo,
+        "--out-dir", codexResumeOut,
+        "--lane", "codex-review",
+        "--session", "thread-review",
+      ],
+      {
+        encoding: "utf8",
+        env: { ...fleetEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: codexResumeArgsFile },
+      },
+    );
+    const codexResumeArgs = existsSync(codexResumeArgsFile)
+      ? JSON.parse(readFileSync(codexResumeArgsFile, "utf8"))
+      : [];
+    check("relay --lane: Codex read-only lane applies before resume",
+      codexResume.status === 0 &&
+        pair(codexResumeArgs, "-s", "read-only") &&
+        codexResumeArgs.indexOf("-s") < codexResumeArgs.indexOf("resume") &&
+        result(codexResumeOut).sandbox === "read-only");
+
+    const opencodeResumeOut = join(cfgRepo, "out-lane-opencode-resume");
+    const opencodeResumeArgsFile = join(cfgRepo, "args-lane-opencode-resume.json");
+    mkdirSync(opencodeResumeOut, { recursive: true });
+    const opencodeResume = spawnSync(
+      process.execPath,
+      [
+        relayPath("opencode"),
+        "--brief", laneBrief,
+        "--cd", cfgRepo,
+        "--out-dir", opencodeResumeOut,
+        "--lane", "opencode-review",
+        "--session", "ses_review",
+      ],
+      {
+        encoding: "utf8",
+        env: { ...fleetEnv, SMOKE_MODE: "capture", SMOKE_ARGS_FILE: opencodeResumeArgsFile },
+      },
+    );
+    const opencodeResumeArgs = existsSync(opencodeResumeArgsFile)
+      ? JSON.parse(readFileSync(opencodeResumeArgsFile, "utf8"))
+      : [];
+    check("relay --lane: OpenCode read-only lane selects plan on resume",
+      opencodeResume.status === 0 &&
+        pair(opencodeResumeArgs, "--agent", "plan") &&
+        !opencodeResumeArgs.includes("--auto") &&
+        result(opencodeResumeOut).agent === "plan" &&
+        result(opencodeResumeOut).resumed === true);
 
     const wrongSkill = spawnSync(
       process.execPath,
