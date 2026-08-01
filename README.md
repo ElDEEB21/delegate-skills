@@ -98,13 +98,8 @@ npx skills add amElnagdy/delegate-skills --skill delegate-setup
 npx skills add amElnagdy/delegate-skills --skill codex-delegate
 ```
 
-Pin a release (git tag). The Skills CLI installs by git ref, not by
-`metadata.version` in `SKILL.md`:
-
-```bash
-npx skills add amElnagdy/delegate-skills@v0.2.0
-npx skills add amElnagdy/delegate-skills@v0.2.0 --skill codex-delegate
-```
+To pin an installation, append an existing release tag as `@vMAJOR.MINOR.PATCH`. The Skills CLI
+installs by git ref, not by `metadata.version` in `SKILL.md`.
 
 Install for a specific agent, or globally:
 

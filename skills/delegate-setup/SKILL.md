@@ -95,13 +95,14 @@ On explicit yes, write **only** the chosen path (validate first). Build the payl
 scope’s raw file (or an empty `lanes` object if new) — not from the effective merged `load` view,
 or a project write will shadow global-only lanes and a global write will promote project-only ones.
 
+Create a file under the platform temporary directory (`$TMPDIR`, `%TEMP%`, or Node `os.tmpdir()`),
+write the **exact approved JSON** into it with the orchestrator's file-writing tool, and use that
+populated path as `<lanes-json>` below. Never validate an empty temp file.
+
 ```bash
-# Write the approved document for ONE scope to a temp file, then validate/write.
-# Use a platform temp path (mktemp, $TMPDIR, %TEMP%, or Node os.tmpdir()) — not a hard-coded /tmp.
-LANES_JSON="$(mktemp "${TMPDIR:-/tmp}/lanes.XXXXXX.json")"   # or equivalent on Windows
-node "<skill-dir>/scripts/config.mjs" validate "$LANES_JSON"
-node "<skill-dir>/scripts/config.mjs" write --scope global "$LANES_JSON"
-# or:  write --scope project --cwd /path/to/repo "$LANES_JSON"
+node "<skill-dir>/scripts/config.mjs" validate "<lanes-json>"
+node "<skill-dir>/scripts/config.mjs" write --scope global "<lanes-json>"
+# or:  write --scope project --cwd /path/to/repo "<lanes-json>"
 ```
 
 Confirm the path written and the active lane names. On update, a short before/after is enough.
