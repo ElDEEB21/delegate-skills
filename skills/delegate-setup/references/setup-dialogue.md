@@ -37,7 +37,7 @@ Never create `.delegate/config.json` merely because cwd is a git repo.
 5. On explicit approval, write via:
 
 ```bash
-# Write the approved JSON to a platform temp file first (mktemp / os.tmpdir() / %TEMP%), then:
+# Write the approved JSON to a uniquely named platform temp file first, then:
 # global
 node <skill-dir>/scripts/config.mjs write --scope global "$LANES_JSON"
 
@@ -48,7 +48,8 @@ node <skill-dir>/scripts/config.mjs write --scope project --cwd <repo> "$LANES_J
 Use the `config.mjs write` command above so project approval is recorded correctly. Re-read with
 `load` and confirm the path. A project write stores an approval hash under the worktree's
 Git metadata; any later content change invalidates it and project lane dispatch fails closed until
-re-approved. Do not hard-code `/tmp` (breaks on native Windows).
+re-approved. Remove the temp file after the write attempt, whether it succeeds or fails. Do not
+hard-code `/tmp` (breaks on native Windows).
 
 ## Auth and models
 

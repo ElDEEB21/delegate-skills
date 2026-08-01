@@ -97,9 +97,10 @@ On explicit yes, write **only** the chosen scope (validate first). Build the pay
 scope’s raw file (or an empty `lanes` object if new) — not from the effective merged `load` view,
 or a project write will shadow global-only lanes and a global write will promote project-only ones.
 
-Create a file under the platform temporary directory (`$TMPDIR`, `%TEMP%`, or Node `os.tmpdir()`),
-write the **exact approved JSON** into it with the orchestrator's file-writing tool, and use that
-populated path as `<lanes-json>` below. Never validate an empty temp file.
+Create a uniquely named file under the platform temporary directory (`$TMPDIR`, `%TEMP%`, or Node
+`os.tmpdir()`), write the **exact approved JSON** into it with the orchestrator's file-writing tool,
+and use that populated path as `<lanes-json>` below. Never validate an empty temp file. Remove the
+temp file after the validation/write attempt, whether it succeeds or fails.
 
 ```bash
 node "<skill-dir>/scripts/config.mjs" validate "<lanes-json>"
