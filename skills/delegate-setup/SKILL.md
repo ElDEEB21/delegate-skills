@@ -119,11 +119,12 @@ Show:
 
 | Lane | Implementer | Model | Effort / variant | Basis | Source (if updating) |
 | --- | --- | --- | --- | --- | --- |
-| feature | opencode | opencode/grok | variant: high | your answer; opencode requires a model | — |
+| feature | opencode | opencode/grok | variant: high | your answer + schema requirement | — |
 | tests | codex | — | — | usage data | — |
 | ui | claude | — | — | my opinion (implementer) | — |
 
-**Basis** is mandatory on every lane: `your answer` / `usage data` / `repo` / `my opinion`. A lane you
+**Basis** is mandatory on every lane: `your answer` / `usage data` / `repo` / `my opinion` /
+`schema requirement` (a dial the schema forces is neither evidence nor opinion — say so). A lane you
 picked from model-quality priors is `my opinion` — never present it as something the tooling
 determined. “Installed and authenticated” is capability, not evidence of fit. When a lane’s
 implementer and its dials come from different places, say both (`usage + my opinion (model)`) — a

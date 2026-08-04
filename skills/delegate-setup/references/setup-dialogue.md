@@ -86,10 +86,12 @@ say where the user works, not which model or effort level to buy for them. That 
 quick-defaults mode, or when the user asked you for a dial: in the evidence modes you write no
 opinion-dials, so there are none to label (see the consent-scope rules in `SKILL.md`).
 
-Opinions about dials travel as an **addendum**, never as a pre-filled field. Show the table and the
-JSON first, then, in a separate paragraph after it: “If you want my picks for models and effort
-levels, say the word and I’ll add them.” Then wait. A dial the user asked for is theirs; the same
-dial sitting inside the JSON they are about to approve spent their quota on your say-so.
+In the evidence modes, unsolicited opinions about dials travel as an **addendum**, never as a
+pre-filled field (quick-defaults proposals may include opinion-labeled dials — the user hired that
+opinion). Show the table and the JSON first, then, in a separate paragraph after it: “If you want my
+picks for models and effort levels, say the word and I’ll add them.” Then wait. A dial the user
+asked for is theirs; the same dial sitting inside the JSON they are about to approve spent their
+quota on your say-so.
 
 ## Scope
 
