@@ -28,7 +28,9 @@ export function runDelegateSetup(h) {
   h.check("discover lists discovered or missing", Array.isArray(report?.discovered) && Array.isArray(report?.missing));
   h.check(
     "discover covers all ten implementers",
-    report && report.discovered.length + report.missing.length === h.SKILLS.length,
+    Array.isArray(report?.discovered) &&
+      Array.isArray(report?.missing) &&
+      report.discovered.length + report.missing.length === h.SKILLS.length,
   );
 
   const agyProbeDir = join(h.scratch, "discover-agy");
@@ -40,7 +42,12 @@ export function runDelegateSetup(h) {
     encoding: "utf8",
     env: { ...process.env, PATH: agyProbeDir },
   });
-  const agyReport = agyDiscover.status === 0 ? JSON.parse(agyDiscover.stdout) : null;
+  let agyReport = null;
+  try {
+    if (agyDiscover.status === 0) agyReport = JSON.parse(agyDiscover.stdout);
+  } catch {
+    agyReport = null;
+  }
   h.check(
     "Agy changelog heading reports the bare version",
     agyReport?.discovered.find(({ key }) => key === "agy")?.version === "1.2.3",

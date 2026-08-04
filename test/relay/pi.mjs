@@ -109,6 +109,7 @@ export async function runPi(h) {
   const resumeCapture = existsSync(resumeArgsFile) ? JSON.parse(readFileSync(resumeArgsFile, "utf8")) : {};
   h.check("pi resume-last: uses documented --continue",
     resume.status === 0 &&
+    Array.isArray(resumeCapture.args) &&
     resumeCapture.args.includes("--continue") &&
     !resumeCapture.args.includes("--session") &&
     existsSync(join(resumeOutDir, "result.json")) &&
@@ -157,7 +158,10 @@ export async function runPi(h) {
       await h.until(() => existsSync(join(preflightOutDir, "events.jsonl")), 2000));
     preflight.kill("SIGTERM");
     const exited = await new Promise((resolveExit) => {
-      const timer = setTimeout(() => resolveExit(false), 5000);
+      const timer = setTimeout(() => {
+        preflight.kill("SIGKILL"); // a survivor holds handles in preflightOutDir past cleanup
+        resolveExit(false);
+      }, 5000);
       preflight.on("close", () => {
         clearTimeout(timer);
         resolveExit(true);

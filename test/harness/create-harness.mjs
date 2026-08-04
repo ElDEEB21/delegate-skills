@@ -30,6 +30,11 @@ export function createHarness() {
     }
     return fn();
   };
+  // kill(0) decides the answer; /proc only refines it, because a reaped-but-unwaited
+  // child stays signalable on Linux while its state is "Z". Everywhere else /proc does
+  // not exist, so the read throws and the catch must keep kill(0)'s verdict. Do NOT
+  // "fix" that catch to return false: on macOS and Windows every process would read as
+  // dead and the whole timeout/abort matrix would pass without felling anything.
   const alive = (pid) => {
     try { process.kill(pid, 0); } catch { return false; }
     try {
