@@ -17,8 +17,13 @@
  *   versionArgs: string[],
  *   versionFallbackArgs?: string[],
  *   versionFormat?: "colon-prefix",
- *   authProbe: null | { args: string[], jsonField?: string },
- *   modelProbe: null | { args: string[], format: "lines"|"cursor" },
+ *   authProbe: null | {
+ *     args: string[],
+ *     jsonField?: string,
+ *     successPattern?: RegExp,
+ *     failPattern?: RegExp,
+ *   },
+ *   modelProbe: null | { args: string[], format: "lines"|"cursor"|"grok"|"table" },
  *   supports: Dial[],
  *   winShell: boolean,
  * }[]}
@@ -39,7 +44,12 @@ export const IMPLEMENTERS = Object.freeze([
     skill: "codex-delegate",
     binary: "codex",
     versionArgs: ["--version"],
-    authProbe: null,
+    // codex writes login status to stderr, not stdout.
+    authProbe: {
+      args: ["login", "status"],
+      successPattern: /logged in/i,
+      failPattern: /not logged in/i,
+    },
     modelProbe: null,
     supports: ["model", "effort", "sandbox", "timeout", "readOnly"],
     winShell: true,
@@ -49,7 +59,8 @@ export const IMPLEMENTERS = Object.freeze([
     skill: "opencode-delegate",
     binary: "opencode",
     versionArgs: ["--version"],
-    authProbe: null,
+    // Exits 0 with an empty list too; a "●" row is the only auth signal.
+    authProbe: { args: ["auth", "list"], successPattern: /^●\s/m },
     modelProbe: { args: ["models"], format: "lines" },
     // OpenCode reasoning intensity is --variant, not --effort.
     supports: ["model", "variant", "timeout", "readOnly"],
@@ -72,8 +83,8 @@ export const IMPLEMENTERS = Object.freeze([
     binary: "grok",
     versionArgs: ["version"],
     versionFallbackArgs: ["--version"],
-    authProbe: null,
-    modelProbe: null,
+    authProbe: { args: ["models"], failPattern: /not authenticated/i },
+    modelProbe: { args: ["models"], format: "grok" },
     supports: ["model", "effort", "sandbox", "timeout", "readOnly"],
     winShell: true,
   },
@@ -82,7 +93,7 @@ export const IMPLEMENTERS = Object.freeze([
     skill: "kimi-delegate",
     binary: "kimi",
     versionArgs: ["--version"],
-    authProbe: null,
+    authProbe: { args: ["provider", "list"], successPattern: /source=(oauth|api)/ },
     modelProbe: null,
     supports: ["model", "timeout"],
     winShell: false,
@@ -112,7 +123,11 @@ export const IMPLEMENTERS = Object.freeze([
     skill: "cursor-delegate",
     binary: "cursor-agent",
     versionArgs: ["--version"],
-    authProbe: null,
+    authProbe: {
+      args: ["status"],
+      successPattern: /logged in as/i,
+      failPattern: /not logged in/i,
+    },
     modelProbe: { args: ["models"], format: "cursor" },
     // cursor-agent has no --sandbox; autonomy is --force / --read-only.
     supports: ["model", "force", "timeout", "readOnly"],
@@ -124,7 +139,8 @@ export const IMPLEMENTERS = Object.freeze([
     binary: "pi",
     versionArgs: ["--version"],
     authProbe: null,
-    modelProbe: null,
+    // Must stay a flag: `pi models` is read as a prompt and hits the API.
+    modelProbe: { args: ["--list-models"], format: "table" },
     supports: ["provider", "model", "timeout", "readOnly"],
     winShell: true,
   },

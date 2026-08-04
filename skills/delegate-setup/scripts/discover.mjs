@@ -10,7 +10,7 @@
  * Node built-ins only. Probed CLIs may contact their own services.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { IMPLEMENTERS } from "./implementers.mjs";
@@ -95,6 +95,30 @@ function runProbe(binaryPath, args, useShell) {
   });
 }
 
+/** Probe output is colorized (opencode); patterns match the plain text. */
+function stripAnsi(text) {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/** spawnSync, not runProbe: success-path stderr matters (codex prints login status there). */
+function captureProbe(binaryPath, args, useShell) {
+  try {
+    const command = useShell ? quoteForCmd(binaryPath) : binaryPath;
+    const result = spawnSync(command, args, {
+      encoding: "utf8",
+      timeout: PROBE_TIMEOUT_MS,
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: useShell,
+    });
+    return {
+      ok: !result.error && result.status === 0,
+      output: stripAnsi(`${result.stdout || ""}${result.stderr || ""}`),
+    };
+  } catch {
+    return { ok: false, output: "" };
+  }
+}
+
 function probeVersion(impl, binaryPath) {
   const useShell = needsWindowsShell(impl, binaryPath);
   const tryArgs = (versionArgs) => {
@@ -126,34 +150,49 @@ function readAuthField(raw, jsonField) {
 
 function probeAuth(impl, binaryPath) {
   if (!impl.authProbe) return null;
+  const { args, jsonField, successPattern, failPattern } = impl.authProbe;
   const useShell = needsWindowsShell(impl, binaryPath);
-  try {
-    const raw = runProbe(binaryPath, impl.authProbe.args, useShell);
-    if (impl.authProbe.jsonField) {
-      return readAuthField(raw, impl.authProbe.jsonField);
-    }
-    return true;
-  } catch (error) {
-    if (impl.authProbe.jsonField) {
+
+  if (jsonField) {
+    try {
+      return readAuthField(runProbe(binaryPath, args, useShell), jsonField);
+    } catch (error) {
       const combined = `${error.stdout || ""}${error.stderr || ""}`;
       if (combined.trim()) {
-        const parsed = readAuthField(combined, impl.authProbe.jsonField);
+        const parsed = readAuthField(combined, jsonField);
         if (parsed !== null) return parsed;
       }
       return null;
     }
-    return null;
   }
+
+  const { ok, output } = captureProbe(binaryPath, args, useShell);
+  // failPattern first: "not logged in" also contains "logged in".
+  if (failPattern && failPattern.test(output)) return false;
+  if (successPattern) return successPattern.test(output) ? true : null;
+  return ok ? true : null;
 }
 
 function parseModelLines(raw, format) {
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const identifiers =
-    format === "cursor"
-      ? lines
-          .filter((line) => line !== "Available models" && !line.startsWith("Tip:"))
-          .map((line) => line.split(/\s+-\s+/, 1)[0])
-      : lines;
+  let identifiers;
+  if (format === "cursor") {
+    identifiers = lines
+      .filter((line) => line !== "Available models" && !line.startsWith("Tip:"))
+      .map((line) => line.split(/\s+-\s+/, 1)[0]);
+  } else if (format === "grok") {
+    identifiers = lines
+      .filter((line) => line.startsWith("* "))
+      .map((line) => line.slice(2).replace(/\s*\(default\)$/, "").trim());
+  } else if (format === "table") {
+    identifiers = lines
+      .slice(1)
+      .map((line) => line.split(/\s+/))
+      .filter((columns) => columns.length >= 2)
+      .map((columns) => `${columns[0]}/${columns[1]}`);
+  } else {
+    identifiers = lines;
+  }
   const unique = [...new Set(identifiers)].filter(Boolean);
   return {
     status: "reported",
