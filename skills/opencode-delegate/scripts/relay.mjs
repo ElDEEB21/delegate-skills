@@ -294,6 +294,8 @@ function gitTouchedFiles(cwd) {
     const output = execFileSync("git", ["status", "--porcelain"], {
       cwd,
       encoding: "utf8",
+      timeout: 10_000,
+      killSignal: "SIGKILL",
       stdio: ["ignore", "pipe", "ignore"],
       maxBuffer: 64 * 1024 * 1024,
     });
