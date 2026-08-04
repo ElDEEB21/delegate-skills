@@ -37,7 +37,7 @@
  *     envDir?: string,
  *     homeSubdir: string,
  *     path: readonly string[],
- *     entry: "file"|"dir",
+ *     entry: "file"|"dir"|"any",
  *     match: RegExp,
  *   },
  *   supports: Dial[],
@@ -203,11 +203,12 @@ export const IMPLEMENTERS = Object.freeze([
     },
     modelProbe: { args: ["models"], format: "cursor" },
     // projects/<project-slug>/agent-transcripts/<chat-uuid>/ — what the CLI writes per
-    // chat. ~/.cursor/chats holds only a handful of older IDE-side entries.
+    // chat; some layouts write flat <chat-uuid>.txt files instead, so accept either.
+    // ~/.cursor/chats holds only a handful of older IDE-side entries.
     usageProbe: {
       homeSubdir: ".cursor",
       path: ["projects", "*", "agent-transcripts"],
-      entry: "dir",
+      entry: "any",
       match: /^[0-9a-f]{8}-[0-9a-f]{4}-/i,
     },
     // cursor-agent has no --sandbox; autonomy is --force / --read-only.
