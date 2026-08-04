@@ -64,6 +64,7 @@ export async function runPi(h) {
   h.check("pi project trust: --approve is explicit and recorded",
     approveRun.status === 0 &&
     JSON.stringify(approveCapture.args) === JSON.stringify(["--mode", "json", "--approve"]) &&
+    existsSync(join(approveOutDir, "result.json")) &&
     h.result(approveOutDir).projectTrusted === true);
 
   const unsafeProvider = spawnSync(process.execPath, [

@@ -5,8 +5,9 @@ import { join } from "node:path";
 export async function runTimeoutBounds(h) {
 const badTimeoutWorkDir = h.freshRepo("work-bad-timeout");
 for (const skill of h.SKILLS) {
-  for (const bad of ["NONSENSE", "", "10", "10s-junk", "1.5s", "1h30", "0s", "596h31m24s", "600h", "10000h"]) {
-    const outDir = join(h.scratch, `out-bad-timeout-${skill}`);
+  // One directory per value: a single leak would otherwise fail every later value too.
+  for (const [i, bad] of ["NONSENSE", "", "10", "10s-junk", "1.5s", "1h30", "0s", "596h31m24s", "600h", "10000h"].entries()) {
+    const outDir = join(h.scratch, `out-bad-timeout-${skill}-${i}`);
     const rejected = spawnSync(process.execPath, [
       h.relayPath(skill),
       "--brief", h.briefPath,
@@ -43,9 +44,10 @@ for (const bad of ["NONSENSE", "0s", "", "10", "10s-junk", "1.5s", "1h30", "596h
   const preflight = spawnSync(process.execPath, [
     h.relayPath("agy"),
     "--brief", h.briefPath,
+    "--cd", h.freshRepo("work-agy-version-hang"),
     "--out-dir", outDir,
     "--timeout", "1s",
-  ], { env: { ...h.baseEnv, SMOKE_MODE: "agy-version-hang" }, encoding: "utf8", timeout: 5000 });
+  ], { env: { ...h.baseEnv, SMOKE_MODE: "agy-version-hang" }, encoding: "utf8", timeout: 15_000 });
   const value = existsSync(join(outDir, "result.json")) ? h.result(outDir) : {};
   h.check("agy preflight: explicit watchdog bounds a hung version probe",
     preflight.status === 124 &&

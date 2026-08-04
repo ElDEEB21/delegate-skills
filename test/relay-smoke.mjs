@@ -56,7 +56,16 @@ function parseOnly(argv) {
     console.error("relay smoke: --only requires a comma-separated module list");
     process.exit(2);
   }
-  return new Set(value.split(",").map((part) => part.trim()).filter(Boolean));
+  const names = new Set(value.split(",").map((part) => part.trim()).filter(Boolean));
+  const known = new Set(runners.map(([name]) => name));
+  const unknown = [...names].filter((name) => !known.has(name));
+  // An unselected registry runs zero checks and would otherwise report "all green".
+  if (names.size === 0 || unknown.length > 0) {
+    console.error(`relay smoke: unknown --only module(s): ${unknown.join(", ") || "(empty selection)"}`);
+    console.error(`relay smoke: modules: ${[...known].join(", ")}`);
+    process.exit(2);
+  }
+  return names;
 }
 
 const only = parseOnly(process.argv.slice(2));
@@ -65,11 +74,13 @@ const shimless = new Set(["package-shape", "syntax"]);
 const needsShim = !only || [...only].some((name) => !shimless.has(name));
 if (needsShim) installShim(h);
 
-for (const [name, run] of runners) {
-  if (only && !only.has(name)) continue;
-  await run(h);
+try {
+  for (const [name, run] of runners) {
+    if (only && !only.has(name)) continue;
+    await run(h);
+  }
+} finally {
+  h.cleanup();
 }
-
-h.cleanup();
 console.log(h.failed ? `\n${h.failed} FAILED` : "\nrelay smoke: all green");
 process.exit(h.failed ? 1 : 0);

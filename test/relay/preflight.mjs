@@ -54,6 +54,8 @@ if (!h.WIN) {
     "--timeout", "1s",
   ], { env: { ...h.baseEnv, SMOKE_MODE: "grok-version-fallback-budget" }, encoding: "utf8", timeout: 15_000 });
   h.check("grok preflight: fallback shares one timeout budget",
-    preflight.status === 124 && h.result(outDir).status === "timeout");
+    preflight.status === 124 &&
+    existsSync(join(outDir, "result.json")) &&
+    h.result(outDir).status === "timeout");
 }
 }

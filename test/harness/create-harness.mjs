@@ -15,7 +15,12 @@ export function createHarness() {
     console.log(`${cond ? "  ok " : "  FAIL"}  ${name}`);
     if (!cond) failed++;
   };
-  const pair = (args, flag, value) => args[args.indexOf(flag) + 1] === value;
+  // indexOf returns -1 for a flag that was never passed; without the guard the
+  // assertion would compare args[0] and pass while the flag is missing.
+  const pair = (args, flag, value) => {
+    const at = args.indexOf(flag);
+    return at !== -1 && args[at + 1] === value;
+  };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const until = async (fn, ms) => {
     const end = Date.now() + ms;
