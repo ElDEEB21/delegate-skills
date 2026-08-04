@@ -38,9 +38,10 @@ Example lane: **feature** → implementer `opencode`, model `opencode/grok`, var
 4. Write **only** after an explicit approval (“yes”, “approve”, “write it”).
 5. Ask scope unless already clear: **global** (all projects) vs **this repo only**. Never create a project file just because cwd is a git repo. If there is no git repo, default to global and say so.
 6. Do not invent model identifiers.
-7. Prefer 3–5 useful lanes over a kitchen-sink map.
-8. Never edit `AGENTS.md`, `CLAUDE.md`, or other user agent-instruction files.
-9. Never run a `*-delegate` relay from this skill.
+7. In interview or usage-scan mode, never write a `model`, `effort` or `variant` the user did not give you and the schema does not require — omit it, so that CLI’s own configured default applies.
+8. Prefer 3–5 useful lanes over a kitchen-sink map.
+9. Never edit `AGENTS.md`, `CLAUDE.md`, or other user agent-instruction files.
+10. Never run a `*-delegate` relay from this skill.
 
 (`<skill-dir>` is this skill’s install directory — the folder that contains this `SKILL.md`.)
 
@@ -85,13 +86,31 @@ anything — one question, three options, not a wizard:
 - **Quick defaults** → propose immediately, and say plainly that the map is your opinion and cheap to
   revise.
 - **Interview** → the four questions live in [references/setup-dialogue.md](references/setup-dialogue.md).
-  Ask about allocation policy, never about model rankings — ranking models is your job.
+  Ask about allocation policy, never about model rankings — ranking models is your job. Put a whole
+  round of questions through **one** medium: all prose or all in one form, never both in a turn — a
+  submitted form ends the turn and the prose questions beside it are never seen.
 - **Usage scan** → `node "<skill-dir>/scripts/discover.mjs" --usage`. Tell the user it is metadata
   only before running it. Each discovered CLI gains `usage: { sessions, lastUsed }`; `null` means no
   probe is wired — unknown, not unused.
 - **Both** → run the scan first, then ask only what the numbers cannot answer.
 - Inside a git repo, repo signals (languages, test weight, frontend share) are a fourth source of
   evidence. They do not change the menu; they feed the proposal and the `repo` basis.
+
+**That menu is also the consent surface** — the option chosen sets how much of the map is yours to
+decide:
+
+- **Quick defaults** — the user hired your opinion. A full map is legitimate, dials included; label
+  every lane `my opinion` and keep it cheap to revise.
+- **Interview / usage scan** — evidence modes, so dials are evidence-gated. Set `model`, `effort` or
+  `variant` **only** from the user’s answer, or where the schema requires it (opencode lanes require
+  `model`). Otherwise omit the dial: every CLI then applies its own configured default, which is the
+  user’s standing choice and better model-evidence than your priors. Choosing which installed
+  implementer gets a lane is still yours — Basis `my opinion` — but a dial that raises spend is not.
+  Offer your dial picks as a short addendum *after* the proposal (“say the word and I’ll add the
+  model and effort settings I’d pick”); never pre-insert them into the JSON awaiting approval.
+- **An unanswered question shrinks the map; it never licenses a substitution.** Propose fewer, more
+  conservative lanes, name the axis you are blind on (no quota answer → say the map is quota-blind),
+  and invite the answer anytime. Re-ask once at most; never backfill silence with priors.
 
 Then propose the lanes. Name them after the work the user described; fall back to `feature`, `tests`,
 `ui`, `fast`, `complex`. Installed implementers only.
@@ -100,13 +119,16 @@ Show:
 
 | Lane | Implementer | Model | Effort / variant | Basis | Source (if updating) |
 | --- | --- | --- | --- | --- | --- |
-| feature | opencode | opencode/grok | variant: high | your answer | — |
-| tests | codex | — | effort: medium | usage data | — |
-| ui | claude | sonnet | — | my opinion | — |
+| feature | opencode | opencode/grok | variant: high | your answer; opencode requires a model | — |
+| tests | codex | — | — | usage data | — |
+| ui | claude | — | — | my opinion (implementer) | — |
 
 **Basis** is mandatory on every lane: `your answer` / `usage data` / `repo` / `my opinion`. A lane you
 picked from model-quality priors is `my opinion` — never present it as something the tooling
-determined. “Installed and authenticated” is capability, not evidence of fit.
+determined. “Installed and authenticated” is capability, not evidence of fit. When a lane’s
+implementer and its dials come from different places, say both (`usage + my opinion (model)`) — a
+label you only need in quick defaults, or when the user asked you for a dial: usage counts and repo
+signals are evidence about *work*, never about which model or effort level to buy.
 
 Then the **complete** JSON (`version`: `delegate-fleet.v1`). One line of why per lane; flag auth or
 model uncertainty.

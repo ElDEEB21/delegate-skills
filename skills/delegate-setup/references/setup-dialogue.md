@@ -36,6 +36,9 @@ Stop at four. Skip any the usage scan already answered.
 The questions are conversation, not a survey — cramming all four into one cold multiple-choice
 form loses exactly what they exist to collect.
 
+- **One medium per round.** Every question you ask in a turn goes through the same channel: all
+  prose, or all in one form. Never mix the two — submitting a form ends the turn, so any prose
+  question asked beside it is simply lost, and the silence that follows is not an answer to it.
 - **Question 1 is open-ended.** You want the user's words — they become lane names. If your harness
   forces options, derive them from evidence (repo, usage scan, what the user has said), keep them one
   genre (kinds of work — never a mix of domains and task types, which overlap), and treat a selection
@@ -47,6 +50,11 @@ form loses exactly what they exist to collect.
   belong in the proposal, after the answers.
 - **Lead with question 1.** Its answer usually reshapes or removes the others. Stop at four also
   means fewer is better.
+- **Silence shrinks the map; it never gets substituted.** An unanswered question means a smaller,
+  more conservative proposal: fewer lanes, and no dial on the axis it would have settled. Say what
+  you are blind on in one line — “nobody told me which subscriptions to spare, so I set no effort
+  dials; each CLI will use the default you configured” — and add that the answer is welcome anytime.
+  Re-ask once if it matters. Never close the gap with your own preference.
 
 ### Reading a usage scan
 
@@ -71,6 +79,17 @@ form loses exactly what they exist to collect.
 Give every proposed lane a Basis: `your answer`, `usage data`, `repo`, or `my opinion`. Use
 `my opinion` whenever the choice came from your own sense of which model is better at the work —
 including when discovery confirmed the CLI is installed and authenticated.
+
+Label the parts separately when they differ. A lane whose implementer came from the usage scan but
+whose model you chose is `usage + my opinion (model)`, never a flat `usage data` — session counts
+say where the user works, not which model or effort level to buy for them. That split only exists in
+quick-defaults mode, or when the user asked you for a dial: in the evidence modes you write no
+opinion-dials, so there are none to label (see the consent-scope rules in `SKILL.md`).
+
+Opinions about dials travel as an **addendum**, never as a pre-filled field. Show the table and the
+JSON first, then, in a separate paragraph after it: “If you want my picks for models and effort
+levels, say the word and I’ll add them.” Then wait. A dial the user asked for is theirs; the same
+dial sitting inside the JSON they are about to approve spent their quota on your say-so.
 
 ## Scope
 
