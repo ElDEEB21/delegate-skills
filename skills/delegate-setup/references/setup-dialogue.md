@@ -24,12 +24,29 @@ Allocation policy only. Users cannot rank model IDs — that is your job, not th
 
 | # | Ask | What it settles |
 | --- | --- | --- |
-| 1 | What kind of work do you delegate most? | The main lane — and its **name**. “migrations”, “wp-plugin”, “bug triage” beat the canned `feature`/`tests`/`ui`/`fast`/`complex` five |
+| 1 | What kind of work do you delegate most? | The main lane — and its **name**. “migrations”, “bug triage”, “release-prep” beat the canned `feature`/`tests`/`ui`/`fast`/`complex` five |
 | 2 | Which paid subscriptions should I burn, and which should I spare? | Quota economics. Discovery cannot see plans, limits, or what a run costs — only the user knows |
 | 3 | Any CLI you already trust, or one that has burned you? | Lived experience outranks your priors about the underlying models |
 | 4 | Default to fast and cheap, or slow and thorough? | Effort / variant dials, and who gets the `complex` lane |
 
 Stop at four. Skip any the usage scan already answered.
+
+### How to ask them
+
+The questions are conversation, not a survey — cramming all four into one cold multiple-choice
+form loses exactly what they exist to collect.
+
+- **Question 1 is open-ended.** You want the user's words — they become lane names. If your harness
+  forces options, derive them from evidence (repo, usage scan, what the user has said), keep them one
+  genre (kinds of work — never a mix of domains and task types, which overlap), and treat a selection
+  as a draft lane name, not a category.
+- **Questions 2 and 3 are set-valued.** The answer is a mapping across CLIs, so options must span the
+  *discovered* CLIs — never an arbitrary subset — with both directions expressible: burn *and* spare,
+  trust *and* burned-by. Multi-select if the harness has it; otherwise ask in prose.
+- **Question 4 may be a closed choice.** Do not pre-mark an option as recommended — recommendations
+  belong in the proposal, after the answers.
+- **Lead with question 1.** Its answer usually reshapes or removes the others. Stop at four also
+  means fewer is better.
 
 ### Reading a usage scan
 
