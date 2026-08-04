@@ -11,7 +11,8 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { accessSync, constants as fsConstants, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { IMPLEMENTERS } from "./implementers.mjs";
 
@@ -31,7 +32,8 @@ Prints JSON:
   }
 
 authenticated is true | false | null (null = unknown / no probe).
-models.status is reported | unsupported | failed.
+models.status is reported | aliases | unsupported | failed
+(aliases = curated aliases from the registry, not a live listing).
 `;
 
 function resolveBinary(binary) {
@@ -173,6 +175,19 @@ function probeAuth(impl, binaryPath) {
   return ok ? true : null;
 }
 
+function modelResult(identifiers, status = "reported") {
+  const unique = [...new Set(identifiers)].filter(Boolean);
+  return {
+    status,
+    values: unique.slice(0, 200),
+    truncated: unique.length > 200,
+  };
+}
+
+function failedModels() {
+  return { status: "failed", values: [], truncated: false };
+}
+
 function parseModelLines(raw, format) {
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   let identifiers;
@@ -193,27 +208,60 @@ function parseModelLines(raw, format) {
   } else {
     identifiers = lines;
   }
-  const unique = [...new Set(identifiers)].filter(Boolean);
-  return {
-    status: "reported",
-    values: unique.slice(0, 200),
-    truncated: unique.length > 200,
-  };
+  return modelResult(identifiers);
+}
+
+/**
+ * Model ids out of a JSON body. Only identifiers are returned — kimi's document
+ * also holds provider credentials, so the raw text must never reach the report.
+ */
+function parseModelJson(raw, format) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return failedModels();
+  }
+  if (format === "codex-cache") {
+    if (!Array.isArray(parsed?.models)) return failedModels();
+    return modelResult(
+      parsed.models.map((entry) => (typeof entry?.slug === "string" ? entry.slug : "")),
+    );
+  }
+  const models = parsed?.models;
+  if (!models || typeof models !== "object" || Array.isArray(models)) return failedModels();
+  return modelResult(Object.keys(models));
+}
+
+/** $CODEX_HOME-style override, else the subdirectory under the user's home. */
+function modelFilePath(probe) {
+  const base = process.env[probe.envDir] || join(homedir(), probe.homeSubdir);
+  return join(base, probe.file);
 }
 
 function probeModels(impl, binaryPath) {
-  if (!impl.modelProbe) {
+  const probe = impl.modelProbe;
+  if (!probe) {
     return { status: "unsupported", values: [], truncated: false };
   }
+  if (probe.static) {
+    return modelResult(probe.static, "aliases");
+  }
+  if (probe.file) {
+    try {
+      return parseModelJson(readFileSync(modelFilePath(probe), "utf8"), probe.format);
+    } catch {
+      // No cache until the CLI has run once; that is not a discovery failure worth throwing on.
+      return failedModels();
+    }
+  }
   try {
-    const raw = runProbe(
-      binaryPath,
-      impl.modelProbe.args,
-      needsWindowsShell(impl, binaryPath),
-    );
-    return parseModelLines(raw, impl.modelProbe.format);
+    const raw = runProbe(binaryPath, probe.args, needsWindowsShell(impl, binaryPath));
+    return probe.format === "kimi-json"
+      ? parseModelJson(raw, probe.format)
+      : parseModelLines(raw, probe.format);
   } catch {
-    return { status: "failed", values: [], truncated: false };
+    return failedModels();
   }
 }
 

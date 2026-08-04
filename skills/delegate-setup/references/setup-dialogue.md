@@ -53,7 +53,9 @@ hard-code `/tmp` (breaks on native Windows).
 
 ## Auth and models
 
-- `authenticated: null` means unknown, not “logged out.”
+- `authenticated: null` means unknown, not “logged out.” Usually it means no auth probe is wired for
+  that CLI (currently `agy` and `pi`, which expose no status command) — say that rather than implying
+  the login failed.
 - Prefer not binding a lane to a CLI discover reports as `authenticated: false`.
 - Do not invent model ids. Use `models.values` when `status` is `reported`, or ask the user, or omit `model` when the CLI has a safe default (OpenCode does **not** — require a model for opencode lanes).
 

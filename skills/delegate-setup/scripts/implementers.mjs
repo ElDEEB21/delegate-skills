@@ -23,7 +23,10 @@
  *     successPattern?: RegExp,
  *     failPattern?: RegExp,
  *   },
- *   modelProbe: null | { args: string[], format: "lines"|"cursor"|"grok"|"table" },
+ *   modelProbe: null
+ *     | { args: string[], format: "lines"|"cursor"|"grok"|"table"|"kimi-json" }
+ *     | { envDir: string, homeSubdir: string, file: string, format: "codex-cache" }
+ *     | { static: readonly string[] },
  *   supports: Dial[],
  *   winShell: boolean,
  * }[]}
@@ -35,7 +38,8 @@ export const IMPLEMENTERS = Object.freeze([
     binary: "claude",
     versionArgs: ["--version"],
     authProbe: { args: ["auth", "status"], jsonField: "loggedIn" },
-    modelProbe: null,
+    // No listing command; `--model` takes one of these aliases or a full model name.
+    modelProbe: { static: ["fable", "opus", "sonnet", "haiku"] },
     supports: ["model", "effort", "timeout", "readOnly"],
     winShell: true,
   },
@@ -50,7 +54,14 @@ export const IMPLEMENTERS = Object.freeze([
       successPattern: /logged in/i,
       failPattern: /not logged in/i,
     },
-    modelProbe: null,
+    // Never spawn `codex models`: the positional word is read as a prompt and hits the API.
+    // The locally cached catalog is the only offline listing.
+    modelProbe: {
+      envDir: "CODEX_HOME",
+      homeSubdir: ".codex",
+      file: "models_cache.json",
+      format: "codex-cache",
+    },
     supports: ["model", "effort", "sandbox", "timeout", "readOnly"],
     winShell: true,
   },
@@ -94,7 +105,8 @@ export const IMPLEMENTERS = Object.freeze([
     binary: "kimi",
     versionArgs: ["--version"],
     authProbe: { args: ["provider", "list"], successPattern: /source=(oauth|api)/ },
-    modelProbe: null,
+    // The JSON body also carries provider apiKey values; only `.models` keys may leave the parser.
+    modelProbe: { args: ["provider", "list", "--json"], format: "kimi-json" },
     supports: ["model", "timeout"],
     winShell: false,
   },

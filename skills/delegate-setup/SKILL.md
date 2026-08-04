@@ -53,7 +53,8 @@ node "<skill-dir>/scripts/discover.mjs"
 ```
 
 Summarize installed vs missing, auth (`true` / `false` / `null` = unknown), and whether models were
-`reported`, `unsupported`, or `failed`.
+`reported`, `aliases` (curated aliases in the registry, not live discovery — full model names also
+work), `unsupported`, or `failed`.
 
 ### 2. Load existing (effective map)
 
