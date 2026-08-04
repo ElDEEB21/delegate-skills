@@ -457,5 +457,19 @@ function main(argv) {
   }
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// realpath BOTH sides, not resolve: skill dirs are commonly symlinked (e.g.
+// ~/.claude/skills → ~/.agents/skills) and a plain resolve() mismatch made this file
+// silently no-op when run through a symlink. The module URL side needs it too —
+// under --preserve-symlinks-main it keeps the symlink path.
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  const toReal = (path) => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  return toReal(process.argv[1]) === toReal(fileURLToPath(import.meta.url));
+})();
 if (isMain) main(process.argv.slice(2));

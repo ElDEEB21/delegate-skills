@@ -16,6 +16,7 @@
  * Node built-ins only.
  */
 
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
 import {
@@ -181,5 +182,19 @@ function main(argv) {
   }
 }
 
-const isMain = process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.meta.url);
+// realpath BOTH sides, not resolve: mirrors config.mjs — symlinked install paths
+// otherwise make this silently no-op (including under --preserve-symlinks-main,
+// where the module URL keeps the symlink path), and relays call it for every
+// --lane dispatch.
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  const toReal = (path) => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return resolvePath(path);
+    }
+  };
+  return toReal(process.argv[1]) === toReal(fileURLToPath(import.meta.url));
+})();
 if (isMain) main(process.argv.slice(2));
