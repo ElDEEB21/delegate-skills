@@ -10,7 +10,7 @@ description: >-
 license: MIT
 compatibility: Requires Node 18+. No implementer CLIs are required — the skill discovers what is available.
 metadata:
-  version: 0.2.0
+  version: 0.4.0
 ---
 
 # Delegate Setup
@@ -38,7 +38,7 @@ Example lane: **feature** → implementer `opencode`, model `opencode/grok`, var
 4. Write **only** after an explicit approval (“yes”, “approve”, “write it”).
 5. Ask scope unless already clear: **global** (all projects) vs **this repo only**. Never create a project file just because cwd is a git repo. If there is no git repo, default to global and say so.
 6. Do not invent model identifiers.
-7. In interview or usage-scan mode, never write a `model`, `effort`, `variant` or `provider` the user did not give you and the schema does not require — omit it, so that CLI’s own configured default applies.
+7. In interview or usage-scan mode, never write **any** dial the user did not give you and the schema does not require — omit it, so the CLI’s or relay’s own default applies.
 8. Prefer 3–5 useful lanes over a kitchen-sink map.
 9. Never edit `AGENTS.md`, `CLAUDE.md`, or other user agent-instruction files.
 10. Never run a `*-delegate` relay from this skill.
@@ -71,8 +71,6 @@ node "<skill-dir>/scripts/config.mjs" load --cwd "$PWD"
 - If `projectPresent` is true and `projectTrusted` is false, label the project lanes **untrusted**.
   They cannot dispatch until the user reviews and approves a project write.
 
-Details: [references/setup-dialogue.md](references/setup-dialogue.md).
-
 ### 3. Propose
 
 Discovery reports capability, never task fit. So ask **one** grounding question before proposing
@@ -83,12 +81,10 @@ anything — one question, three options, not a wizard:
 > **(3) Usage scan** — I re-read your CLIs’ local session folders (counts and dates only, never the
 > conversations) and let the numbers pick your main lanes. Happy to do 2 and 3 together.
 
-- **Quick defaults** → propose immediately, and say plainly that the map is your opinion and cheap to
-  revise.
-- **Interview** → the four questions live in [references/setup-dialogue.md](references/setup-dialogue.md).
-  Ask about allocation policy, never about model rankings — ranking models is your job. Put a whole
-  round of questions through **one** medium: all prose or all in one form, never both in a turn — a
-  submitted form ends the turn and the prose questions beside it are never seen.
+- **Quick defaults** → propose immediately.
+- **Interview** → the four questions (allocation policy, never model rankings) and how to ask them
+  (one medium per round) live in [references/setup-dialogue.md](references/setup-dialogue.md) — read
+  it before you ask.
 - **Usage scan** → `node "<skill-dir>/scripts/discover.mjs" --usage`. Tell the user it is metadata
   only before running it. Each discovered CLI gains `usage: { sessions, lastUsed }`; `null` means no
   probe is wired — unknown, not unused.
@@ -100,14 +96,14 @@ anything — one question, three options, not a wizard:
 decide:
 
 - **Quick defaults** — the user hired your opinion. A full map is legitimate, dials included; label
-  every lane `my opinion` and keep it cheap to revise.
-- **Interview / usage scan** — evidence modes, so dials are evidence-gated. Set `model`, `effort`,
-  `variant` or `provider` **only** from the user’s answer, or where the schema requires it (opencode
-  lanes require `model`). Otherwise omit the dial: every CLI then applies its own configured default, which is the
-  user’s standing choice and better model-evidence than your priors. Choosing which installed
-  implementer gets a lane is still yours — Basis `my opinion` — but a dial that raises spend is not.
-  Offer your dial picks as a short addendum *after* the proposal (“say the word and I’ll add the
-  model and effort settings I’d pick”); never pre-insert them into the JSON awaiting approval.
+  every lane `my opinion`, say plainly that the map is your opinion, and keep it cheap to revise.
+- **Interview / usage scan** — evidence modes, so **every** dial is gated (rule 7): set one only from
+  the user’s answer, or where the schema requires it (opencode lanes require `model`). Omitting is
+  always safe — every dial has a default the user already lives with, and a CLI’s configured default
+  is their standing choice, better evidence than your priors. Choosing which installed implementer
+  gets a lane is still yours — Basis `my opinion` — but a dial that raises spend is not: offer your
+  dial picks only as an addendum after the proposal, see
+  [references/setup-dialogue.md](references/setup-dialogue.md).
 - **An unanswered question shrinks the map; it never licenses a substitution.** Propose fewer, more
   conservative lanes, name the axis you are blind on (no quota answer → say the map is quota-blind),
   and invite the answer anytime. Re-ask once at most; never backfill silence with priors.
@@ -126,10 +122,9 @@ Show:
 **Basis** is mandatory on every lane: `your answer` / `usage data` / `repo` / `my opinion` /
 `schema requirement` (a dial the schema forces is neither evidence nor opinion — say so). A lane you
 picked from model-quality priors is `my opinion` — never present it as something the tooling
-determined. “Installed and authenticated” is capability, not evidence of fit. When a lane’s
-implementer and its dials come from different places, say both (`usage + my opinion (model)`) — a
-label you only need in quick defaults, or when the user asked you for a dial: usage counts and repo
-signals are evidence about *work*, never about which model or effort level to buy.
+determined, and “installed and authenticated” is capability, not evidence of fit. When a lane’s
+implementer and its dials come from different places, split the label — see
+[references/setup-dialogue.md](references/setup-dialogue.md).
 
 Then the **complete** JSON (`version`: `delegate-fleet.v1`). One line of why per lane; flag auth or
 model uncertainty.
@@ -149,9 +144,10 @@ scope’s raw file (or an empty `lanes` object if new) — not from the effectiv
 or a project write will shadow global-only lanes and a global write will promote project-only ones.
 
 Create a uniquely named file under the platform temporary directory (`$TMPDIR`, `%TEMP%`, or Node
-`os.tmpdir()`), write the **exact approved JSON** into it with the orchestrator's file-writing tool,
-and use that populated path as `<lanes-json>` below. Never validate an empty temp file. Remove the
-temp file after the validation/write attempt, whether it succeeds or fails.
+`os.tmpdir()`; never hard-code `/tmp`, which breaks on native Windows), write the **exact approved
+JSON** into it with the orchestrator's file-writing tool, and use that populated path as
+`<lanes-json>` below. Never validate an empty temp file. Remove the temp file after the
+validation/write attempt, whether it succeeds or fails.
 
 ```bash
 node "<skill-dir>/scripts/config.mjs" validate "<lanes-json>"
@@ -159,8 +155,9 @@ node "<skill-dir>/scripts/config.mjs" write --scope global "<lanes-json>"
 # or:  write --scope project --cwd /path/to/repo "<lanes-json>"
 ```
 
-Confirm the path written and the active lane names. Project writes bind approval to the exact config
-content; later changes fail closed until re-approved. On update, a short before/after is enough.
+Re-read with `load`, then confirm the path written and the active lane names. Project writes bind
+approval to the exact config content; later changes fail closed until re-approved. On update, a short
+before/after is enough.
 
 ### 6. Ready to delegate
 
