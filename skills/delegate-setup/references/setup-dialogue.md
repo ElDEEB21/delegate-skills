@@ -24,7 +24,7 @@ Allocation policy only. Users cannot rank model IDs — that is your job, not th
 
 | # | Ask | What it settles |
 | --- | --- | --- |
-| 1 | What kind of work do you delegate most? | The main lane — and its **name**. “migrations”, “wp-plugin”, “bug triage” beat the canned `feature`/`tests`/`ui`/`fast`/`complex` five |
+| 1 | What kind of work do you delegate most? | The main lane — and its **name**. “migrations”, “bug triage”, “release-prep” beat the canned `feature`/`tests`/`ui`/`fast`/`complex` five |
 | 2 | Which paid subscriptions should I burn, and which should I spare? | Quota economics. Discovery cannot see plans, limits, or what a run costs — only the user knows |
 | 3 | Any CLI you already trust, or one that has burned you? | Lived experience outranks your priors about the underlying models |
 | 4 | Default to fast and cheap, or slow and thorough? | Effort / variant dials, and who gets the `complex` lane |
