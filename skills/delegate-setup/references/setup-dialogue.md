@@ -13,6 +13,48 @@ When loading existing config:
    that they cannot dispatch until the user approves a project write.
 5. Paste both raw JSON files only if the user asks.
 
+## Grounding the lane map
+
+Ask the grounding menu as **one** question with three options (quick defaults / interview / usage
+scan), then act on the answer. One question — never a wizard.
+
+### The four interview questions
+
+Allocation policy only. Users cannot rank model IDs — that is your job, not theirs.
+
+| # | Ask | What it settles |
+| --- | --- | --- |
+| 1 | What kind of work do you delegate most? | The main lane — and its **name**. “migrations”, “wp-plugin”, “bug triage” beat the canned `feature`/`tests`/`ui`/`fast`/`complex` five |
+| 2 | Which paid subscriptions should I burn, and which should I spare? | Quota economics. Discovery cannot see plans, limits, or what a run costs — only the user knows |
+| 3 | Any CLI you already trust, or one that has burned you? | Lived experience outranks your priors about the underlying models |
+| 4 | Default to fast and cheap, or slow and thorough? | Effort / variant dials, and who gets the `complex` lane |
+
+Stop at four. Skip any the usage scan already answered.
+
+### Reading a usage scan
+
+`node <skill-dir>/scripts/discover.mjs --usage` adds `usage` to each discovered CLI:
+`{ "sessions": <int>, "lastUsed": <ISO-8601 | null> }`, or `null`.
+
+- Say what it does **before** running it: it counts session files and reads their timestamps. It never
+  opens one, so no conversation content is read.
+- `usage: null` = no probe wired for that CLI, or no local state directory. Unknown, not unused —
+  never report it as zero.
+- Large disparities are honest evidence: 1600 codex sessions against 20 pi sessions tells you where
+  the user actually works. That earns the main lane.
+- Small differences are noise. 97 against 61 decides nothing — fall back to the interview or to your
+  opinion, and label it as such.
+- `lastUsed` weighs as much as the count. A big count that stopped months ago is a CLI the user moved
+  off; a recent date on a small count is one they are adopting.
+- Counts are lifetime totals for that machine, not “this month”, and only cover sessions the CLI still
+  keeps on disk.
+
+### Labelling the basis
+
+Give every proposed lane a Basis: `your answer`, `usage data`, `repo`, or `my opinion`. Use
+`my opinion` whenever the choice came from your own sense of which model is better at the work —
+including when discovery confirmed the CLI is installed and authenticated.
+
 ## Scope
 
 | User said / situation | Scope |

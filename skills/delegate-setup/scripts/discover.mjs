@@ -4,6 +4,11 @@
  *
  * Usage:
  *   node discover.mjs           JSON report on stdout
+ *   node discover.mjs --usage   same report, plus a `usage` field per discovered CLI:
+ *                               { sessions, lastUsed } counted from that CLI's local
+ *                               session store, or null where no probe is wired.
+ *                               Metadata only — session entries are listed and stat'd,
+ *                               never opened, because they hold the user's conversations.
  *   node discover.mjs --help
  *
  * Exit 0 even when nothing is installed. Exit 2 on usage errors.
@@ -11,7 +16,7 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { accessSync, constants as fsConstants, readFileSync, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { IMPLEMENTERS } from "./implementers.mjs";
@@ -22,6 +27,7 @@ const HELP = `discover.mjs — probe PATH for installed implementer CLIs
 
 Usage:
   node discover.mjs
+  node discover.mjs --usage
   node discover.mjs --help
 
 Prints JSON:
@@ -34,6 +40,11 @@ Prints JSON:
 authenticated is true | false | null (null = unknown / no probe).
 models.status is reported | aliases | unsupported | failed
 (aliases = curated aliases from the registry, not a live listing).
+
+--usage adds "usage" to each discovered entry:
+  { "sessions": <int>, "lastUsed": <ISO-8601 | null> }, or null when no usage probe
+  is wired or the CLI has no local state directory (null = unknown, not zero).
+It counts session entries and reads their mtimes; it never opens a session file.
 `;
 
 function resolveBinary(binary) {
@@ -260,12 +271,78 @@ function probeModels(impl, binaryPath) {
   }
 }
 
+/** Session containers under `base`; "*" matches any directory at that level. */
+function usageContainers(base, path) {
+  let dirs = [base];
+  for (const segment of path) {
+    const next = [];
+    for (const dir of dirs) {
+      for (const entry of readEntries(dir)) {
+        if (!entry.isDirectory()) continue;
+        if (segment !== "*" && entry.name !== segment) continue;
+        next.push(join(dir, entry.name));
+      }
+    }
+    dirs = next;
+  }
+  return dirs;
+}
+
+function readEntries(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * How much the user works in this CLI, from directory listings and mtimes only.
+ * Session files hold the user's conversations; none of them is ever opened.
+ */
+function probeUsage(impl) {
+  const probe = impl.usageProbe;
+  if (!probe) return null;
+  const base = (probe.envDir && process.env[probe.envDir]) || join(homedir(), probe.homeSubdir);
+  try {
+    if (!statSync(base).isDirectory()) return null;
+  } catch {
+    // No state directory at all: unknown, not zero.
+    return null;
+  }
+
+  let sessions = 0;
+  let lastUsed = 0;
+  for (const dir of usageContainers(base, probe.path)) {
+    for (const entry of readEntries(dir)) {
+      if (probe.entry !== "any" && entry.isDirectory() !== (probe.entry === "dir")) continue;
+      if (!probe.match.test(entry.name)) continue;
+      sessions += 1;
+      const entryPath = join(dir, entry.name);
+      try {
+        lastUsed = Math.max(lastUsed, statSync(entryPath).mtimeMs);
+        if (entry.isDirectory()) {
+          // A directory's mtime does not advance when a file inside it grows, so a
+          // resumed session would read as abandoned; stat the children too (never open them).
+          for (const child of readEntries(entryPath)) {
+            lastUsed = Math.max(lastUsed, statSync(join(entryPath, child.name)).mtimeMs);
+          }
+        }
+      } catch {
+        // Entry vanished mid-scan; the count still holds.
+      }
+    }
+  }
+  return { sessions, lastUsed: lastUsed > 0 ? new Date(lastUsed).toISOString() : null };
+}
+
 function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(HELP);
     process.exit(0);
   }
-  if (argv.length > 0) {
+  const withUsage = argv.includes("--usage");
+  if (argv.some((arg) => arg !== "--usage")) {
     process.stderr.write("discover.mjs: unexpected arguments. Use --help.\n");
     process.exit(2);
   }
@@ -279,7 +356,7 @@ function main(argv) {
       missing.push({ key: impl.key, binary: impl.binary, skill: impl.skill });
       continue;
     }
-    discovered.push({
+    const entry = {
       key: impl.key,
       skill: impl.skill,
       binary: impl.binary,
@@ -288,7 +365,9 @@ function main(argv) {
       authenticated: probeAuth(impl, binaryPath),
       supports: [...impl.supports],
       models: probeModels(impl, binaryPath),
-    });
+    };
+    if (withUsage) entry.usage = probeUsage(impl);
+    discovered.push(entry);
   }
 
   process.stdout.write(
