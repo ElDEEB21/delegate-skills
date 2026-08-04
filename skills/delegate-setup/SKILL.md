@@ -38,7 +38,7 @@ Example lane: **feature** → implementer `opencode`, model `opencode/grok`, var
 4. Write **only** after an explicit approval (“yes”, “approve”, “write it”).
 5. Ask scope unless already clear: **global** (all projects) vs **this repo only**. Never create a project file just because cwd is a git repo. If there is no git repo, default to global and say so.
 6. Do not invent model identifiers.
-7. In interview or usage-scan mode, never write a `model`, `effort` or `variant` the user did not give you and the schema does not require — omit it, so that CLI’s own configured default applies.
+7. In interview or usage-scan mode, never write a `model`, `effort`, `variant` or `provider` the user did not give you and the schema does not require — omit it, so that CLI’s own configured default applies.
 8. Prefer 3–5 useful lanes over a kitchen-sink map.
 9. Never edit `AGENTS.md`, `CLAUDE.md`, or other user agent-instruction files.
 10. Never run a `*-delegate` relay from this skill.
@@ -101,9 +101,9 @@ decide:
 
 - **Quick defaults** — the user hired your opinion. A full map is legitimate, dials included; label
   every lane `my opinion` and keep it cheap to revise.
-- **Interview / usage scan** — evidence modes, so dials are evidence-gated. Set `model`, `effort` or
-  `variant` **only** from the user’s answer, or where the schema requires it (opencode lanes require
-  `model`). Otherwise omit the dial: every CLI then applies its own configured default, which is the
+- **Interview / usage scan** — evidence modes, so dials are evidence-gated. Set `model`, `effort`,
+  `variant` or `provider` **only** from the user’s answer, or where the schema requires it (opencode
+  lanes require `model`). Otherwise omit the dial: every CLI then applies its own configured default, which is the
   user’s standing choice and better model-evidence than your priors. Choosing which installed
   implementer gets a lane is still yours — Basis `my opinion` — but a dial that raises spend is not.
   Offer your dial picks as a short addendum *after* the proposal (“say the word and I’ll add the
