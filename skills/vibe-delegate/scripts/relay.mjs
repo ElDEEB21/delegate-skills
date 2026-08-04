@@ -86,7 +86,7 @@ import {join, resolve, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
-import { makeLineScanner } from "../../../lib/event-scanner.mjs";
+const MAX_BUFFERED_CHARS = 1_048_576;
 
 const DEFAULT_TIMEOUT = "30m";
 const MAX_TIMER_MS = 2_147_483_647;
@@ -94,6 +94,25 @@ const MAX_BRIEF_BYTES = (process.platform === "win32" ? 12 : 120) * 1024;
 const PROBE_TIMEOUT_MS = 10_000;
 
 const IMPLEMENTER_KEY = "vibe";
+
+function makeLineScanner(onObject) {
+  let buf = "";
+  return (chunk) => {
+    if (!chunk) return;
+    buf += chunk;
+    if (buf.length > MAX_BUFFERED_CHARS) {
+      buf = "";
+      return;
+    }
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try { onObject(JSON.parse(trimmed)); } catch { /* skip non-JSON lines */ }
+    }
+  };
+}
 
 function applyFleetLane(opts, flagged) {
   if (!opts.lane) return;

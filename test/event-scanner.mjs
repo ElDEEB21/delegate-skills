@@ -1,10 +1,41 @@
 // delegate-skills · test/event-scanner.mjs
 //
-// Direct tests for the shared scanners in lib/event-scanner.mjs.  Node built-ins
-// only; run with `node test/event-scanner.mjs`.
+// Direct tests for the inlined scanners. Node built-ins only; run with
+// `node test/event-scanner.mjs`.
 
 import assert from "node:assert/strict";
-import { makeEventScanner, makeLineScanner } from "../lib/event-scanner.mjs";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+function extract(source, symbol, kind, relay) {
+  const anchor = kind === "const"
+    ? new RegExp(`^const ${symbol} =.*$`, "gm")
+    : new RegExp(`^function ${symbol}\\(`, "gm");
+  const matches = [...source.matchAll(anchor)];
+  if (matches.length !== 1) {
+    throw new Error(`${relay}: expected one top-level ${kind} ${symbol}, found ${matches.length}`);
+  }
+  const start = matches[0].index;
+  if (kind === "const") return source.slice(start, source.indexOf("\n", start));
+  const next = /^(?:async )?function /gm;
+  next.lastIndex = start + 1;
+  const end = next.exec(source)?.index ?? source.length;
+  return source.slice(start, end);
+}
+
+function loadScanner(relay, symbol) {
+  const source = readFileSync(join(here, "..", "skills", `${relay}-delegate`, "scripts", "relay.mjs"), "utf8");
+  const maxBufferedChars = extract(source, "MAX_BUFFERED_CHARS", "const", relay);
+  const scanner = extract(source, symbol, "function", relay);
+  return new Function(`${maxBufferedChars}\n${scanner}\nreturn ${symbol};`)();
+}
+
+// Parity guarantees these copies match every relay that ships each scanner.
+const makeEventScanner = loadScanner("claude", "makeEventScanner");
+const makeLineScanner = loadScanner("vibe", "makeLineScanner");
 
 let passed = 0;
 let failed = 0;

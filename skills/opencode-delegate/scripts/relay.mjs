@@ -73,7 +73,7 @@ import {join, resolve, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
-import { makeEventScanner } from "../../../lib/event-scanner.mjs";
+const MAX_BUFFERED_CHARS = 1_048_576;
 
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_483_647;
@@ -82,6 +82,64 @@ const MAX_TIMER_MS = 2_147_483_647;
 const SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 const IMPLEMENTER_KEY = "opencode";
+
+function makeEventScanner(onObject) {
+  let buf = "";
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  return (chunk) => {
+    if (!chunk) return;
+    buf += chunk;
+    if (buf.length > MAX_BUFFERED_CHARS) {
+      // Unterminated or malformed tail that will never close; drop it and reset
+      // so the next chunk starts a fresh scan.
+      buf = "";
+      depth = 0;
+      start = -1;
+      inString = false;
+      escaped = false;
+      return;
+    }
+    for (let i = 0; i < buf.length; i += 1) {
+      const ch = buf[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      // Only track strings inside an object (depth > 0).  At depth 0 we are
+      // skipping a junk prefix, and an unmatched `"` there must not swallow the
+      // real `{...}` that follows in the same chunk.
+      if (ch === '"') { if (depth > 0) inString = true; continue; }
+      if (ch === "{") {
+        if (depth === 0) start = i;
+        depth += 1;
+      } else if (ch === "}") {
+        if (depth > 0) {
+          depth -= 1;
+          if (depth === 0 && start !== -1) {
+            const slice = buf.slice(start, i + 1);
+            try { onObject(JSON.parse(slice)); } catch { /* skip malformed */ }
+            start = -1;
+          }
+        }
+      }
+    }
+    // Retain only an in-progress object (if any) so the buffer cannot grow
+    // without bound; everything already emitted or skipped is dropped.  Reset
+    // the scanner state: the next call re-derives depth/string/escape by
+    // scanning the retained prefix (which always begins at an object's `{`)
+    // from scratch.
+    buf = depth > 0 && start !== -1 ? buf.slice(start) : "";
+    start = -1;
+    depth = 0;
+    inString = false;
+    escaped = false;
+  };
+}
 
 function applyFleetLane(opts, flagged) {
   if (!opts.lane) return;
