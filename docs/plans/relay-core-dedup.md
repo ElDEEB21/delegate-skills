@@ -1,6 +1,6 @@
 # Plan: relay dedup — drift reconciliation + parity gate
 
-> **Status:** ADOPTED (v2), not yet implemented. Date: 2026-08-05.
+> **Status:** IMPLEMENTED (PR #50). Adopted 2026-08-04.
 > Supersedes the v1 build-time code-gen plan (condensed in the appendix — kept so the
 > analysis isn't lost). v1 was fact-checked against the tree, then both plans were
 > debated via a read-only Codex adjudication; v2 won on all five contested points.
@@ -14,7 +14,7 @@ shrink (see packaging constraint below), so the real problem is drift, not dupli
 fix the divergences once, then make drift impossible to land. No generator, no shared
 source dir — the relays themselves stay the source; a fast CI parity test proves they agree.
 
-## Verified drift facts (byte-checked 2026-08-05, branch `feat/consent-scope`)
+## Verified drift facts (byte-checked 2026-08-04, branch `feat/consent-scope`)
 
 v1's evidence came from diffing claude vs codex only and assumed the other 8 matched
 claude. They match codex. Corrected picture:
@@ -22,7 +22,7 @@ claude. They match codex. Corrected picture:
 | Symbol | Reality |
 |---|---|
 | `killChild(child, signal)` | null-guard `if (!child \|\| !child.pid) return;` exists **only in claude**; 9/10 lack it. Bodies otherwise semantically identical (formatting/comments differ). |
-| `gitTouchedFiles(cwd)` | `stdio: ["ignore","pipe","ignore"]` **only in claude**; 9/10 omit it. |
+| `gitTouchedFiles(cwd)` | `stdio: ["ignore","pipe","ignore"]` **only in claude**; 9/10 omit it. Found in PR #50 review: **only vibe** bounded the probe (`timeout` + `killSignal: "SIGKILL"`); the canonical body now bounds it for all 10. |
 | `parseDuration(duration)` | BigInt variant with in-function `MAX_TIMER_MS` ceiling in **8/10**; agy and pi use the Number variant with call-site-only guards. |
 | `MAX_TIMER_MS` | defined in 9/10; pi inlines `2_147_483_647` instead. |
 | `writeJsonAtomic` | named helper **only in claude** (`${path}.tmp-${pid}`); 9/10 inline temp+rename (`${path}.${pid}.tmp`). |
