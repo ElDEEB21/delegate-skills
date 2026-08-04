@@ -91,6 +91,7 @@ import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_TIMEOUT = "30m";
+const MAX_TIMER_MS = 2_147_483_647;
 const VERSION_TIMEOUT_MS = 10_000;
 const READ_ONLY_TOOLS = "read,grep,find,ls";
 // --model, --provider, and --session values reach a shell on win32 (shell:true for the
@@ -141,10 +142,19 @@ function fail(message, code = 2) {
 }
 
 function parseDuration(duration) {
-  // Whole-string match: "1mtypo" must be rejected, not read as one minute.
   const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(duration);
   if (!match || (!match[1] && !match[2] && !match[3])) return null;
-  return (Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)) * 1000;
+  try {
+    const seconds =
+      BigInt(match[1] || 0) * 3600n +
+      BigInt(match[2] || 0) * 60n +
+      BigInt(match[3] || 0);
+    const milliseconds = seconds * 1000n;
+    if (milliseconds <= 0n || milliseconds > BigInt(MAX_TIMER_MS)) return null;
+    return Number(milliseconds);
+  } catch {
+    return null;
+  }
 }
 
 function parseArgs(argv) {
@@ -240,20 +250,26 @@ function readBrief(opts) {
 }
 
 function killChild(child, signal = "SIGTERM") {
-  // The kill must reach the whole process family, not just the CLI — a tool subprocess left
-  // running would keep editing after the relay reports timeout/aborted. On Windows Node can't
-  // kill a process family without a Job Object, so kill the tree by pid with the OS tool
-  // (/t includes descendants, /f forces it — the tree-kill/npm idiom).
+  if (!child || !child.pid) return;
   if (process.platform === "win32") {
-    if (signal !== "SIGTERM") return; // the first taskkill /f already felled the whole tree
-    // stderr is inherited so a real taskkill failure (e.g. access denied) is visible to the operator;
-    // its non-zero exit when the tree is already gone is the expected race and carries nothing to do.
-    try { execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: ["ignore", "ignore", "inherit"] }); }
-    catch { /* already gone — nothing left to kill */ }
-  } else {
-    // On POSIX the child leads its own process group (the detached launch), so the negative-pid
-    // signal reaches every descendant; fall back to the lone pid if the group is already gone.
-    try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch { /* already gone */ } }
+    if (signal !== "SIGTERM") return;
+    try {
+      execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: ["ignore", "ignore", "inherit"],
+      });
+    } catch {
+      // The process tree already exited.
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // The process group already exited.
+    }
   }
 }
 
@@ -314,12 +330,14 @@ async function piVersion(timeoutMs, onChild) {
 }
 
 function gitTouchedFiles(cwd) {
-  // null (not []) when git cannot report — git missing, or a non-repo run — so
-  // the caller can tell "git unavailable" apart from "pi changed nothing."
-  // [] means git ran and the working tree is clean.
   try {
-    const out = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-    return out.split("\n").map((line) => line.trimEnd()).filter(Boolean);
+    const output = execFileSync("git", ["status", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return output.split("\n").map((line) => line.trimEnd()).filter(Boolean);
   } catch {
     return null;
   }
