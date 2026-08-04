@@ -34,6 +34,7 @@
  * Options:
  *   --brief <file>          Path to the brief. If omitted, read it from stdin.
  *   --cd <dir>              Working root for Cursor (default: current directory).
+ *   --lane <name>           Fleet lane from delegate-setup config (dials apply; explicit flags win).
  *   --model <name>          Cursor model (default: your Cursor default, usually
  *                           auto). List names with `cursor-agent models`.
  *   --read-only             Run in Cursor's plan mode: read-only analysis, no
@@ -69,9 +70,10 @@
  * to cursor-agent), or cursor_agent_unavailable.
  */
 
-import { spawn, execSync, execFileSync } from "node:child_process";
+import {spawn, execSync, execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, renameSync, rmSync, readFileSync, existsSync, appendFileSync } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import {join, resolve, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
@@ -81,13 +83,54 @@ const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:@/[\],=-]*$/;
 const SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
+const IMPLEMENTER_KEY = "cursor";
+
+function applyFleetLane(opts, flagged) {
+  if (!opts.lane) return;
+  const script = join(dirname(fileURLToPath(import.meta.url)), "../../delegate-setup/scripts/lane.mjs");
+  if (!existsSync(script)) {
+    fail("--lane requires the delegate-setup skill installed beside this relay");
+  }
+  const r = spawnSync(
+    process.execPath,
+    [script, "resolve", "--cwd", opts.cd, "--lane", opts.lane, "--implementer", IMPLEMENTER_KEY],
+    { encoding: "utf8", env: process.env },
+  );
+  if (r.error) fail(`lane resolve failed: ${r.error.message}`);
+  if (r.status !== 0) {
+    fail((r.stderr || "lane resolve failed").trim().replace(/^lane\.mjs:\s*/, ""));
+  }
+  let resolved;
+  try {
+    const lines = (r.stdout || "").trim().split("\n").filter(Boolean);
+    resolved = JSON.parse(lines[lines.length - 1]);
+  } catch {
+    fail("lane resolve returned invalid JSON");
+  }
+  opts.laneSource = resolved.source;
+  for (const [field, value] of Object.entries(resolved.dials || {})) {
+    if (flagged.has(field)) continue;
+    if (field === "autonomy" && (flagged.has("autonomy") || flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "agent" && (flagged.has("agent") || flagged.has("readOnly"))) continue;
+    if (field === "sandbox" && (flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "permissionMode" && (flagged.has("permissionMode") || flagged.has("readOnly"))) continue;
+    if (field === "planOnly" && (flagged.has("planOnly") || flagged.has("readOnly"))) continue;
+    if (field === "readOnly" && flagged.has("readOnly")) continue;
+    if (field === "force" && flagged.has("force")) continue;
+    opts[field] = value;
+  }
+}
+
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
   process.exit(code);
 }
 
 function parseArgs(argv) {
+  const flagged = new Set();
   const opts = {
+    lane: null,
+    laneSource: null,
     brief: null,
     cd: process.cwd(),
     model: null,
@@ -115,18 +158,20 @@ function parseArgs(argv) {
         break;
       case "--brief": opts.brief = next(); break;
       case "--cd": opts.cd = resolve(next()); break;
-      case "--model": opts.model = next(); break;
-      case "--read-only": opts.readOnly = true; break;
-      case "--no-force": opts.force = false; break;
+      case "--lane": opts.lane = next(); break;
+      case "--model": opts.model = next(); flagged.add("model"); break;
+      case "--read-only": opts.readOnly = true; flagged.add("readOnly"); break;
+      case "--no-force": opts.force = false; flagged.add("force"); break;
       case "--session": opts.session = next(); break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--add-dir": opts.addDirs.push(next()); break;
-      case "--timeout": opts.timeout = next(); break;
+      case "--timeout": opts.timeout = next(); flagged.add("timeout"); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
       default:
         fail(`unknown option: ${arg}`);
     }
   }
+  applyFleetLane(opts, flagged);
   if (opts.resumeLast && opts.session) {
     fail("--resume-last and --session are mutually exclusive; pass only one");
   }
@@ -341,6 +386,8 @@ function makeResultWriter(opts, version, run) {
   return (extra) => {
     const result = {
       schema: "delegate-relay.result.v1",
+      lane: opts.lane,
+      laneSource: opts.laneSource,
       tool: "cursor-agent",
       workdir: opts.cd,
       model: opts.model,

@@ -24,7 +24,7 @@ const sessionRun = spawnSync(process.execPath,
 const sessionArgs = existsSync(sessionArgsFile) ? JSON.parse(readFileSync(sessionArgsFile, "utf8")) : [];
 h.check("codex session: resumes the named thread",
   sessionRun.status === 0 && sessionArgs[0] === "exec" && sessionArgs[1] === "resume" && sessionArgs[2] === "thread-abc");
-h.check("codex session: no -s on a resume (exec resume rejects it)", !sessionArgs.includes("-s"));
+h.check("codex session: an unqualified resume leaves the active Codex sandbox config alone", !sessionArgs.includes("-s"));
 h.check("codex session: recorded in result.json",
   existsSync(join(sessionOutDir, "result.json")) && h.result(sessionOutDir).session === "thread-abc");
 const bothResumeRun = spawnSync(process.execPath,

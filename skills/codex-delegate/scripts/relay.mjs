@@ -26,6 +26,7 @@
  * Options:
  *   --brief <file>          Path to the brief. If omitted, the brief is read from stdin.
  *   --cd <dir>              Working root for Codex (default: current directory).
+ *   --lane <name>           Fleet lane from delegate-setup config (dials apply; explicit flags win).
  *   --model <name>          Codex model (default: Codex's own configured default).
  *   --effort <level>        Reasoning effort, passed to Codex as
  *                           `-c model_reasoning_effort=<level>` (default: Codex's
@@ -34,7 +35,7 @@
  *                           (default: workspace-write).
  *   --read-only             Shortcut for --sandbox read-only (review/diagnosis, no edits).
  *   --resume-last           Continue the most recent Codex session; send only the delta brief.
- *                           (Inherits the original session's sandbox and working root.)
+ *                           An explicit --sandbox/--read-only override applies to the resumed turn.
  *   --session <id>          Continue a specific Codex session by thread id (from a prior
  *                           result.json). Safer than --resume-last when other Codex runs
  *                           may have happened since - "last" is global, not per-repo.
@@ -65,9 +66,10 @@
  * with no file as a usage error.
  */
 
-import { spawn, execFileSync } from "node:child_process";
+import {spawn, execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync, appendFileSync } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import {join, resolve, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
@@ -75,6 +77,48 @@ const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_483_647;
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+// Model reaches cmd.exe on win32 (shell:true for the codex.cmd shim) — same shell-safe
+// family as grok/pi. Keep in lockstep with delegate-setup MODEL_TOKEN.shellSafe.
+const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+
+const IMPLEMENTER_KEY = "codex";
+
+function applyFleetLane(opts, flagged) {
+  if (!opts.lane) return;
+  const script = join(dirname(fileURLToPath(import.meta.url)), "../../delegate-setup/scripts/lane.mjs");
+  if (!existsSync(script)) {
+    fail("--lane requires the delegate-setup skill installed beside this relay");
+  }
+  const r = spawnSync(
+    process.execPath,
+    [script, "resolve", "--cwd", opts.cd, "--lane", opts.lane, "--implementer", IMPLEMENTER_KEY],
+    { encoding: "utf8", env: process.env },
+  );
+  if (r.error) fail(`lane resolve failed: ${r.error.message}`);
+  if (r.status !== 0) {
+    fail((r.stderr || "lane resolve failed").trim().replace(/^lane\.mjs:\s*/, ""));
+  }
+  let resolved;
+  try {
+    const lines = (r.stdout || "").trim().split("\n").filter(Boolean);
+    resolved = JSON.parse(lines[lines.length - 1]);
+  } catch {
+    fail("lane resolve returned invalid JSON");
+  }
+  opts.laneSource = resolved.source;
+  for (const [field, value] of Object.entries(resolved.dials || {})) {
+    if (flagged.has(field)) continue;
+    if (field === "autonomy" && (flagged.has("autonomy") || flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "agent" && (flagged.has("agent") || flagged.has("readOnly"))) continue;
+    if (field === "sandbox" && (flagged.has("sandbox") || flagged.has("readOnly"))) continue;
+    if (field === "permissionMode" && (flagged.has("permissionMode") || flagged.has("readOnly"))) continue;
+    if (field === "planOnly" && (flagged.has("planOnly") || flagged.has("readOnly"))) continue;
+    if (field === "readOnly" && flagged.has("readOnly")) continue;
+    if (field === "force" && flagged.has("force")) continue;
+    opts[field] = value;
+    if (field === "sandbox") opts.sandboxConfigured = true;
+  }
+}
 
 function fail(message, code = 2) {
   process.stderr.write(`relay: ${message}\n`);
@@ -82,12 +126,16 @@ function fail(message, code = 2) {
 }
 
 function parseArgs(argv) {
+  const flagged = new Set();
   const opts = {
+    lane: null,
+    laneSource: null,
     brief: null,
     cd: process.cwd(),
     model: null,
     effort: null,
     sandbox: "workspace-write",
+    sandboxConfigured: false,
     resumeLast: false,
     session: null,
     skipGitRepoCheck: false,
@@ -110,24 +158,29 @@ function parseArgs(argv) {
         break;
       case "--brief": opts.brief = next(); break;
       case "--cd": opts.cd = resolve(next()); break;
-      case "--model": opts.model = next(); break;
-      case "--effort": opts.effort = next(); break;
-      case "--sandbox": opts.sandbox = next(); break;
-      case "--read-only": opts.sandbox = "read-only"; break;
+      case "--lane": opts.lane = next(); break;
+      case "--model": opts.model = next(); flagged.add("model"); break;
+      case "--effort": opts.effort = next(); flagged.add("effort"); break;
+      case "--sandbox": opts.sandbox = next(); opts.sandboxConfigured = true; flagged.add("sandbox"); break;
+      case "--read-only": opts.sandbox = "read-only"; opts.sandboxConfigured = true; flagged.add("sandbox"); flagged.add("readOnly"); break;
       case "--resume-last": opts.resumeLast = true; break;
       case "--session": opts.session = next(); break;
       case "--skip-git-repo-check": opts.skipGitRepoCheck = true; break;
-      case "--timeout": opts.timeout = next(); break;
+      case "--timeout": opts.timeout = next(); flagged.add("timeout"); break;
       case "--out-dir": opts.outDir = resolve(next()); break;
       default:
         fail(`unknown option: ${arg}`);
     }
   }
+  applyFleetLane(opts, flagged);
   if (!SANDBOX_MODES.has(opts.sandbox)) {
     fail(`invalid --sandbox "${opts.sandbox}" (expected: ${[...SANDBOX_MODES].join(", ")})`);
   }
   if (opts.effort !== null && !/^[a-z][a-z0-9-]*$/i.test(opts.effort)) {
     fail(`invalid --effort "${opts.effort}" (expected a non-empty bare token)`);
+  }
+  if (opts.model !== null && !SAFE_MODEL.test(opts.model)) {
+    fail("--model contains unsupported characters (allowed: letters, digits, . _ : / -)");
   }
   // The watchdog is relay-only (codex has no timeout flag), so a malformed
   // --timeout must fail loudly here - a silent no-watchdog fallback would be wrong.
@@ -263,6 +316,10 @@ function timestamp() {
 
 function buildArgv(opts, finalPath) {
   const argv = ["exec"];
+  const resuming = Boolean(opts.session || opts.resumeLast);
+  // Codex accepts shared exec options before the resume subcommand. Reapply only
+  // an explicitly selected sandbox; otherwise leave the active Codex config alone.
+  if (resuming && opts.sandboxConfigured) argv.push("-s", opts.sandbox);
   if (opts.session) argv.push("resume", opts.session);
   else if (opts.resumeLast) argv.push("resume", "--last");
   // ponytail: shell:true on win32 (needed for the codex.cmd shim) doesn't quote
@@ -271,14 +328,12 @@ function buildArgv(opts, finalPath) {
   // Ceiling: if quoting proves too blunt, drop shell:true and resolve the shim.
   const outPath = process.platform === "win32" ? `"${finalPath}"` : finalPath;
   argv.push("--json", "-o", outPath);
-  // `-s`/`-C` are not accepted by `exec resume`; resume inherits the original
-  // session's sandbox and working root, and we set the child process cwd below.
-  if (!opts.resumeLast && !opts.session) {
+  if (!resuming) {
     argv.push("-s", opts.sandbox);
   }
   if (opts.model) argv.push("-m", opts.model);
-  // `-c` is accepted by `exec resume` (unlike `-s`/`-C`), so the effort override
-  // applies to fresh and resumed runs alike.
+  // `-c` is accepted by the resume subcommand, so the effort override applies to
+  // fresh and resumed runs alike.
   if (opts.effort !== null) argv.push("-c", `model_reasoning_effort=${opts.effort}`);
   if (opts.skipGitRepoCheck) argv.push("--skip-git-repo-check");
   argv.push("-"); // read the prompt from stdin
@@ -329,10 +384,13 @@ function makeResultWriter(opts, version, run) {
   // standing metadata, persists result.json, and returns the object it just
   // wrote so the caller can hand it straight to printSummary.
   return (extra) => {
+    const resuming = Boolean(opts.resumeLast || opts.session);
     const result = {
       schema: "delegate-relay.result.v1",
+      lane: opts.lane,
+      laneSource: opts.laneSource,
       workdir: opts.cd,
-      sandbox: opts.resumeLast || opts.session ? "(inherited from resumed session)" : opts.sandbox,
+      sandbox: !resuming || opts.sandboxConfigured ? opts.sandbox : "(Codex config on resume)",
       model: opts.model,
       effort: opts.effort,
       resumeLast: opts.resumeLast,

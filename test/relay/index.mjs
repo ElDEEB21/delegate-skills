@@ -11,6 +11,7 @@ import { runPi } from "./pi.mjs";
 import { runClaude } from "./claude.mjs";
 import { runTimeoutTree } from "./timeout-tree.mjs";
 import { runAbort } from "./abort.mjs";
+import { runDelegateSetup } from "./delegate-setup.mjs";
 
 export const runners = [
   ["package-shape", runPackageShape],
@@ -26,4 +27,5 @@ export const runners = [
   ["claude", runClaude],
   ["timeout-tree", runTimeoutTree],
   ["abort", runAbort],
+  ["delegate-setup", runDelegateSetup],
 ];
