@@ -31,6 +31,23 @@ Allocation policy only. Users cannot rank model IDs — that is your job, not th
 
 Stop at four. Skip any the usage scan already answered.
 
+### How to ask them
+
+The questions are conversation, not a survey — cramming all four into one cold multiple-choice
+form loses exactly what they exist to collect.
+
+- **Question 1 is open-ended.** You want the user's words — they become lane names. If your harness
+  forces options, derive them from evidence (repo, usage scan, what the user has said), keep them one
+  genre (kinds of work — never a mix of domains and task types, which overlap), and treat a selection
+  as a draft lane name, not a category.
+- **Questions 2 and 3 are set-valued.** The answer is a mapping across CLIs, so options must span the
+  *discovered* CLIs — never an arbitrary subset — with both directions expressible: burn *and* spare,
+  trust *and* burned-by. Multi-select if the harness has it; otherwise ask in prose.
+- **Question 4 may be a closed choice.** Do not pre-mark an option as recommended — recommendations
+  belong in the proposal, after the answers.
+- **Lead with question 1.** Its answer usually reshapes or removes the others. Stop at four also
+  means fewer is better.
+
 ### Reading a usage scan
 
 `node <skill-dir>/scripts/discover.mjs --usage` adds `usage` to each discovered CLI:
