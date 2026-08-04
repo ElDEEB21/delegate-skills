@@ -318,8 +318,16 @@ function probeUsage(impl) {
       if (entry.isDirectory() !== (probe.entry === "dir")) continue;
       if (!probe.match.test(entry.name)) continue;
       sessions += 1;
+      const entryPath = join(dir, entry.name);
       try {
-        lastUsed = Math.max(lastUsed, statSync(join(dir, entry.name)).mtimeMs);
+        lastUsed = Math.max(lastUsed, statSync(entryPath).mtimeMs);
+        if (probe.entry === "dir") {
+          // A directory's mtime does not advance when a file inside it grows, so a
+          // resumed session would read as abandoned; stat the children too (never open them).
+          for (const child of readEntries(entryPath)) {
+            lastUsed = Math.max(lastUsed, statSync(join(entryPath, child.name)).mtimeMs);
+          }
+        }
       } catch {
         // Entry vanished mid-scan; the count still holds.
       }
