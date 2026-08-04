@@ -4,6 +4,11 @@
  * One table: skill key → binary, launch hints, supported lane dials, probes.
  * Consumed by discover.mjs and config.mjs. Relays will share this in Phase 2.
  *
+ * `usageProbe.path` walks down from the CLI's state directory to the folders that
+ * hold session entries ("*" matches any directory at that level); `entry` + `match`
+ * say which names count as one session. Session files hold the user's conversations,
+ * so these are listed and stat'd only — never opened.
+ *
  * Node built-ins only. No network, credentials, or telemetry.
  */
 
@@ -28,6 +33,13 @@
  *     | { args: string[], format: "lines"|"cursor"|"grok"|"table" }
  *     | { envDir: string, homeSubdir: string, file: string, format: "codex-cache" }
  *     | { static: readonly string[] },
+ *   usageProbe: null | {
+ *     envDir?: string,
+ *     homeSubdir: string,
+ *     path: readonly string[],
+ *     entry: "file"|"dir",
+ *     match: RegExp,
+ *   },
  *   supports: Dial[],
  *   winShell: boolean,
  * }[]}
@@ -41,6 +53,14 @@ export const IMPLEMENTERS = Object.freeze([
     authProbe: { args: ["auth", "status"], jsonField: "loggedIn" },
     // No listing command; `--model` takes one of these aliases or a full model name.
     modelProbe: { static: ["fable", "opus", "sonnet", "haiku"] },
+    // <config>/projects/<project-slug>/<session-uuid>.jsonl — one file per session.
+    usageProbe: {
+      envDir: "CLAUDE_CONFIG_DIR",
+      homeSubdir: ".claude",
+      path: ["projects", "*"],
+      entry: "file",
+      match: /\.jsonl$/,
+    },
     supports: ["model", "effort", "timeout", "readOnly"],
     winShell: true,
   },
@@ -63,6 +83,15 @@ export const IMPLEMENTERS = Object.freeze([
       file: "models_cache.json",
       format: "codex-cache",
     },
+    // sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl. archived_sessions is a second
+    // store of the same shape; counting only live rollouts keeps one meaning per number.
+    usageProbe: {
+      envDir: "CODEX_HOME",
+      homeSubdir: ".codex",
+      path: ["sessions", "*", "*", "*"],
+      entry: "file",
+      match: /^rollout-.*\.jsonl$/,
+    },
     supports: ["model", "effort", "sandbox", "timeout", "readOnly"],
     winShell: true,
   },
@@ -75,6 +104,10 @@ export const IMPLEMENTERS = Object.freeze([
     // without one is the logged-out state, not an ambiguous miss.
     authProbe: { args: ["auth", "list"], successPattern: /^●\s/m, missMeansFalse: true },
     modelProbe: { args: ["models"], format: "lines" },
+    // No usage probe: the session files under ~/.local/share/opencode/storage stopped
+    // being written when OpenCode moved to opencode.db, and a session count from that
+    // database would mean opening conversation content.
+    usageProbe: null,
     // OpenCode reasoning intensity is --variant, not --effort.
     supports: ["model", "variant", "timeout", "readOnly"],
     winShell: true,
@@ -87,6 +120,13 @@ export const IMPLEMENTERS = Object.freeze([
     versionFormat: "colon-prefix",
     authProbe: null,
     modelProbe: { args: ["models"], format: "lines" },
+    // Antigravity keeps CLI state under ~/.gemini, one .db per conversation.
+    usageProbe: {
+      homeSubdir: ".gemini/antigravity-cli",
+      path: ["conversations"],
+      entry: "file",
+      match: /\.db$/,
+    },
     supports: ["model", "timeout"],
     winShell: false,
   },
@@ -98,6 +138,14 @@ export const IMPLEMENTERS = Object.freeze([
     versionFallbackArgs: ["--version"],
     authProbe: { args: ["models"], failPattern: /not authenticated/i },
     modelProbe: { args: ["models"], format: "grok" },
+    // sessions/<url-encoded-cwd>/<session-uuid>/ — one directory per session; the
+    // prompt_history.jsonl sitting beside them is per-workspace, not per-session.
+    usageProbe: {
+      homeSubdir: ".grok",
+      path: ["sessions", "*"],
+      entry: "dir",
+      match: /^[0-9a-f]{8}-[0-9a-f]{4}-/i,
+    },
     supports: ["model", "effort", "sandbox", "timeout", "readOnly"],
     winShell: true,
   },
@@ -110,6 +158,13 @@ export const IMPLEMENTERS = Object.freeze([
     // No credential-free listing exists: the provider-list JSON and the config file behind it
     // both inline provider api keys, and this script may not buffer credentials.
     modelProbe: null,
+    // sessions/<wd_workspace>/session_<uuid>/ — one directory per session.
+    usageProbe: {
+      homeSubdir: ".kimi-code",
+      path: ["sessions", "*"],
+      entry: "dir",
+      match: /^session_/,
+    },
     supports: ["model", "timeout"],
     winShell: false,
   },
@@ -120,6 +175,8 @@ export const IMPLEMENTERS = Object.freeze([
     versionArgs: ["--version"],
     authProbe: null,
     modelProbe: null,
+    // No documented local session store; usage stays unknown rather than guessed.
+    usageProbe: null,
     supports: ["model", "permissionMode", "timeout", "readOnly"],
     winShell: false,
   },
@@ -130,6 +187,7 @@ export const IMPLEMENTERS = Object.freeze([
     versionArgs: ["--version"],
     authProbe: null,
     modelProbe: null,
+    usageProbe: null,
     supports: ["timeout", "readOnly"],
     winShell: false,
   },
@@ -144,6 +202,14 @@ export const IMPLEMENTERS = Object.freeze([
       failPattern: /not logged in/i,
     },
     modelProbe: { args: ["models"], format: "cursor" },
+    // projects/<project-slug>/agent-transcripts/<chat-uuid>/ — what the CLI writes per
+    // chat. ~/.cursor/chats holds only a handful of older IDE-side entries.
+    usageProbe: {
+      homeSubdir: ".cursor",
+      path: ["projects", "*", "agent-transcripts"],
+      entry: "dir",
+      match: /^[0-9a-f]{8}-[0-9a-f]{4}-/i,
+    },
     // cursor-agent has no --sandbox; autonomy is --force / --read-only.
     supports: ["model", "force", "timeout", "readOnly"],
     winShell: true,
@@ -156,6 +222,13 @@ export const IMPLEMENTERS = Object.freeze([
     authProbe: null,
     // Must stay a flag: `pi models` is read as a prompt and hits the API.
     modelProbe: { args: ["--list-models"], format: "table" },
+    // ~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl.
+    usageProbe: {
+      homeSubdir: ".pi/agent",
+      path: ["sessions", "*"],
+      entry: "file",
+      match: /\.jsonl$/,
+    },
     supports: ["provider", "model", "timeout", "readOnly"],
     winShell: true,
   },
