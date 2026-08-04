@@ -42,6 +42,8 @@ Four invariants hold for every skill here, and they are the bar for a new one:
 
 Fixes to a relay, a reference, or the README need no claim. Keep the diff to one concern, run
 `node test/relay-smoke.mjs` and `npx skills add . --list`, and say in the pull request what you ran.
+For a single relay or concern during development, `node test/relay-smoke.mjs --only codex` (comma-separated
+module names — see `test/relay/index.mjs`) skips the rest of the matrix.
 A changed relay also wants a direct run — `--help` plus a read-only or no-write run against a
 throwaway repo. The full pre-publish list is in [AGENTS.md](AGENTS.md).
 
