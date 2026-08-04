@@ -46,6 +46,8 @@ Example lane: **feature** → implementer `opencode`, model `opencode/grok`, var
 
 ## Flow
 
+`discover → load → grounding menu → propose (with Basis) → scope → approve → write`
+
 ### 1. Discover
 
 ```bash
@@ -53,7 +55,8 @@ node "<skill-dir>/scripts/discover.mjs"
 ```
 
 Summarize installed vs missing, auth (`true` / `false` / `null` = unknown), and whether models were
-`reported`, `unsupported`, or `failed`.
+`reported`, `aliases` (curated aliases in the registry, not live discovery — full model names also
+work), `unsupported`, or `failed`.
 
 ### 2. Load existing (effective map)
 
@@ -71,14 +74,39 @@ Details: [references/setup-dialogue.md](references/setup-dialogue.md).
 
 ### 3. Propose
 
-Propose a compact set of lanes from discovery + what the user cares about. Starters when useful:
-`feature`, `tests`, `ui`, `fast`, `complex` — only for installed implementers.
+Discovery reports capability, never task fit. So ask **one** grounding question before proposing
+anything — one question, three options, not a wizard:
+
+> How should I pick the lanes? **(1) Quick defaults** — I decide, no questions.
+> **(2) Interview** — about four questions on how you want work allocated.
+> **(3) Usage scan** — I re-read your CLIs’ local session folders (counts and dates only, never the
+> conversations) and let the numbers pick your main lanes. Happy to do 2 and 3 together.
+
+- **Quick defaults** → propose immediately, and say plainly that the map is your opinion and cheap to
+  revise.
+- **Interview** → the four questions live in [references/setup-dialogue.md](references/setup-dialogue.md).
+  Ask about allocation policy, never about model rankings — ranking models is your job.
+- **Usage scan** → `node "<skill-dir>/scripts/discover.mjs" --usage`. Tell the user it is metadata
+  only before running it. Each discovered CLI gains `usage: { sessions, lastUsed }`; `null` means no
+  probe is wired — unknown, not unused.
+- **Both** → run the scan first, then ask only what the numbers cannot answer.
+- Inside a git repo, repo signals (languages, test weight, frontend share) are a fourth source of
+  evidence. They do not change the menu; they feed the proposal and the `repo` basis.
+
+Then propose the lanes. Name them after the work the user described; fall back to `feature`, `tests`,
+`ui`, `fast`, `complex`. Installed implementers only.
 
 Show:
 
-| Lane | Implementer | Model | Effort / variant | Source (if updating) |
-| --- | --- | --- | --- | --- |
-| feature | opencode | opencode/grok | variant: high | — |
+| Lane | Implementer | Model | Effort / variant | Basis | Source (if updating) |
+| --- | --- | --- | --- | --- | --- |
+| feature | opencode | opencode/grok | variant: high | your answer | — |
+| tests | codex | — | effort: medium | usage data | — |
+| ui | claude | sonnet | — | my opinion | — |
+
+**Basis** is mandatory on every lane: `your answer` / `usage data` / `repo` / `my opinion`. A lane you
+picked from model-quality priors is `my opinion` — never present it as something the tooling
+determined. “Installed and authenticated” is capability, not evidence of fit.
 
 Then the **complete** JSON (`version`: `delegate-fleet.v1`). One line of why per lane; flag auth or
 model uncertainty.
