@@ -51,7 +51,45 @@ Normal users won't know model IDs; discovery must surface them. Verified:
   positional-prompt trap, not a listing failure. `--list-models` works offline
   against configured providers (lmstudio/sakana/zai seen locally).
 
-## 4. Orchestrator dialogue gaps noticed during the test run
+## 4. Orchestrator dialogue gaps noticed during the test run — partly DONE
+
+## 5. Propose step: ground the lane map in evidence, not priors
+
+Discovery reports capability (installed, auth, dials, model IDs) but zero
+task-fit signal — so the orchestrator fills the gap with model-quality priors
+and presents them with false authority ("feature → codex" reads as determined,
+it was opinion). First live test: every lane assignment except claude's
+confirmed auth was a prior. Fix in two parts:
+
+**a) Basis column (mandatory, cheap).** The proposal table gets a Basis column
+per lane: `your answer` / `usage data` / `repo` / `my opinion`. Kills the
+false-authority problem regardless of which grounding path runs.
+
+**b) Grounding menu (one question, not a wizard).** Before proposing, offer:
+
+1. *Quick defaults* — disclosed opinion, zero friction. Must stay an option;
+   lane maps are cheap to revise.
+2. *Interview* — ~4 questions about allocation policy, never about models
+   (users can't rank model IDs; that's the orchestrator's job):
+   dominant work type (also yields better lane names than the canned five),
+   which subscriptions to burn vs spare (quota economics are invisible to
+   discovery — only the user knows), CLIs they trust/distrust from
+   experience, fast-and-cheap vs slow-and-thorough bias.
+3. *Usage scan* — metadata only: session counts + last-used mtimes from each
+   CLI's local state (~/.codex/history.jsonl + sessions, ~/.kimi-code/sessions,
+   cursor/grok/opencode equivalents). "codex 400 sessions this month, kimi 2"
+   is honest evidence for the main lane. Never read session content — privacy
+   cost is high, marginal value low. Prefer implementing as
+   `discover.mjs --usage` (deterministic script output, testable, numbers not
+   vibes) over SKILL.md prose telling the orchestrator to grep the home dir;
+   cost is the script must know each CLI's state paths.
+
+Combining 2+3 = run the scan first, then ask fewer questions. In a git repo,
+the repo itself is a fourth source (languages, test weight, frontend share →
+which lanes matter); the menu stays the same, only option 3 sees more.
+
+Revised flow: `discover → load → grounding menu → propose (with Basis) →
+scope → approve → write`.
 
 - SKILL.md tells the orchestrator to summarize auth as true/false/null but
   gives no guidance to explain *why* null happens ("no probe wired") — first
