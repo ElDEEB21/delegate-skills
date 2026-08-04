@@ -219,20 +219,25 @@ function readBrief(opts) {
 }
 
 function killChild(child, signal = "SIGTERM") {
-  // A timeout/abort must stop Qoder's tools too, or a descendant could keep
-  // editing after the relay reports that the run ended.
+  if (!child || !child.pid) return;
   if (process.platform === "win32") {
-    if (signal !== "SIGTERM") return; // taskkill /f already felled the tree
+    if (signal !== "SIGTERM") return;
     try {
       execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
         stdio: ["ignore", "ignore", "inherit"],
       });
-    } catch { /* The tree already exited. */ }
-  } else {
-    try {
-      process.kill(-child.pid, signal);
     } catch {
-      try { child.kill(signal); } catch { /* The tree already exited. */ }
+      // The process tree already exited.
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // The process group already exited.
     }
   }
 }
@@ -259,6 +264,9 @@ function gitTouchedFiles(cwd) {
     const output = execFileSync("git", ["status", "--porcelain"], {
       cwd,
       encoding: "utf8",
+      timeout: 10_000,
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "ignore"],
       maxBuffer: 64 * 1024 * 1024,
     });
     return output.split("\n").map((line) => line.trimEnd()).filter(Boolean);

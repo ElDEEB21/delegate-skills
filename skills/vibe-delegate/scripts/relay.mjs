@@ -313,38 +313,41 @@ function parseDuration(duration) {
 }
 
 function gitTouchedFiles(cwd) {
-  // null (not []) when git cannot report — git missing, or a non-repo run — so
-  // the caller can tell "git unavailable" apart from "Vibe changed nothing."
-  // [] means git ran and the working tree is clean.
   try {
-    const out = execFileSync("git", ["status", "--porcelain"], {
+    const output = execFileSync("git", ["status", "--porcelain"], {
       cwd,
       encoding: "utf8",
-      timeout: PROBE_TIMEOUT_MS,
+      timeout: 10_000,
       killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "ignore"],
       maxBuffer: 64 * 1024 * 1024,
     });
-    return out.split("\n").map((line) => line.trimEnd()).filter(Boolean);
+    return output.split("\n").map((line) => line.trimEnd()).filter(Boolean);
   } catch {
     return null;
   }
 }
 
 function killChild(child, signal = "SIGTERM") {
-  // A timeout/abort must stop Vibe's tools too, or a descendant could keep
-  // editing after the relay reports that the run ended.
+  if (!child || !child.pid) return;
   if (process.platform === "win32") {
-    if (signal !== "SIGTERM") return; // taskkill /f already felled the tree
+    if (signal !== "SIGTERM") return;
     try {
       execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
         stdio: ["ignore", "ignore", "inherit"],
       });
-    } catch { /* The tree already exited. */ }
-  } else {
-    try {
-      process.kill(-child.pid, signal);
     } catch {
-      try { child.kill(signal); } catch { /* The tree already exited. */ }
+      // The process tree already exited.
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // The process group already exited.
     }
   }
 }

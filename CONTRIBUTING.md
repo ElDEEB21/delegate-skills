@@ -76,6 +76,11 @@ module names — see `test/relay/index.mjs`) skips the rest of the matrix.
 A changed relay also wants a direct run — `--help` plus a read-only or no-write run against a
 throwaway repo. The full pre-publish list is in [AGENTS.md](AGENTS.md).
 
+## Shared relay helpers
+
+Shared relay helpers are byte-identical by CI contract. Edit one relay, run
+`node test/relay-parity.mjs`, then paste its helper into the copies the test names.
+
 ## Review
 
 One maintainer reviews these and reads the relay line by line. Expect questions about anything the
