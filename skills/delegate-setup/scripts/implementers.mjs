@@ -22,9 +22,10 @@
  *     jsonField?: string,
  *     successPattern?: RegExp,
  *     failPattern?: RegExp,
+ *     missMeansFalse?: boolean,
  *   },
  *   modelProbe: null
- *     | { args: string[], format: "lines"|"cursor"|"grok"|"table"|"kimi-json" }
+ *     | { args: string[], format: "lines"|"cursor"|"grok"|"table" }
  *     | { envDir: string, homeSubdir: string, file: string, format: "codex-cache" }
  *     | { static: readonly string[] },
  *   supports: Dial[],
@@ -70,8 +71,9 @@ export const IMPLEMENTERS = Object.freeze([
     skill: "opencode-delegate",
     binary: "opencode",
     versionArgs: ["--version"],
-    // Exits 0 with an empty list too; a "●" row is the only auth signal.
-    authProbe: { args: ["auth", "list"], successPattern: /^●\s/m },
+    // Exits 0 with an empty list too; a "●" row is the only auth signal, so a clean run
+    // without one is the logged-out state, not an ambiguous miss.
+    authProbe: { args: ["auth", "list"], successPattern: /^●\s/m, missMeansFalse: true },
     modelProbe: { args: ["models"], format: "lines" },
     // OpenCode reasoning intensity is --variant, not --effort.
     supports: ["model", "variant", "timeout", "readOnly"],
@@ -105,8 +107,9 @@ export const IMPLEMENTERS = Object.freeze([
     binary: "kimi",
     versionArgs: ["--version"],
     authProbe: { args: ["provider", "list"], successPattern: /source=(oauth|api)/ },
-    // The JSON body also carries provider apiKey values; only `.models` keys may leave the parser.
-    modelProbe: { args: ["provider", "list", "--json"], format: "kimi-json" },
+    // No credential-free listing exists: the provider-list JSON and the config file behind it
+    // both inline provider api keys, and this script may not buffer credentials.
+    modelProbe: null,
     supports: ["model", "timeout"],
     winShell: false,
   },

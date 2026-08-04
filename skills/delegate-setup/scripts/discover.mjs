@@ -152,7 +152,7 @@ function readAuthField(raw, jsonField) {
 
 function probeAuth(impl, binaryPath) {
   if (!impl.authProbe) return null;
-  const { args, jsonField, successPattern, failPattern } = impl.authProbe;
+  const { args, jsonField, successPattern, failPattern, missMeansFalse } = impl.authProbe;
   const useShell = needsWindowsShell(impl, binaryPath);
 
   if (jsonField) {
@@ -171,7 +171,12 @@ function probeAuth(impl, binaryPath) {
   const { ok, output } = captureProbe(binaryPath, args, useShell);
   // failPattern first: "not logged in" also contains "logged in".
   if (failPattern && failPattern.test(output)) return false;
-  if (successPattern) return successPattern.test(output) ? true : null;
+  if (successPattern) {
+    if (successPattern.test(output)) return true;
+    // Only a clean run can mean logged out, and only where the probe says absence is proof;
+    // elsewhere a reworded CLI would read as a confident false.
+    return ok && missMeansFalse ? false : null;
+  }
   return ok ? true : null;
 }
 
@@ -211,26 +216,18 @@ function parseModelLines(raw, format) {
   return modelResult(identifiers);
 }
 
-/**
- * Model ids out of a JSON body. Only identifiers are returned — kimi's document
- * also holds provider credentials, so the raw text must never reach the report.
- */
-function parseModelJson(raw, format) {
+/** Parses the "codex-cache" file shape; only the slugs leave the parser. */
+function parseModelCache(raw) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch {
     return failedModels();
   }
-  if (format === "codex-cache") {
-    if (!Array.isArray(parsed?.models)) return failedModels();
-    return modelResult(
-      parsed.models.map((entry) => (typeof entry?.slug === "string" ? entry.slug : "")),
-    );
-  }
-  const models = parsed?.models;
-  if (!models || typeof models !== "object" || Array.isArray(models)) return failedModels();
-  return modelResult(Object.keys(models));
+  if (!Array.isArray(parsed?.models)) return failedModels();
+  return modelResult(
+    parsed.models.map((entry) => (typeof entry?.slug === "string" ? entry.slug : "")),
+  );
 }
 
 /** $CODEX_HOME-style override, else the subdirectory under the user's home. */
@@ -249,7 +246,7 @@ function probeModels(impl, binaryPath) {
   }
   if (probe.file) {
     try {
-      return parseModelJson(readFileSync(modelFilePath(probe), "utf8"), probe.format);
+      return parseModelCache(readFileSync(modelFilePath(probe), "utf8"));
     } catch {
       // No cache until the CLI has run once; that is not a discovery failure worth throwing on.
       return failedModels();
@@ -257,9 +254,7 @@ function probeModels(impl, binaryPath) {
   }
   try {
     const raw = runProbe(binaryPath, probe.args, needsWindowsShell(impl, binaryPath));
-    return probe.format === "kimi-json"
-      ? parseModelJson(raw, probe.format)
-      : parseModelLines(raw, probe.format);
+    return parseModelLines(raw, probe.format);
   } catch {
     return failedModels();
   }
