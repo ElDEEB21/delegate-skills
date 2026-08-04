@@ -30,7 +30,7 @@ Four invariants hold for every skill here, and they are the bar for a new one:
       report, `touchedFiles` (`null` when git cannot report, `[]` when the tree is clean), and a
       session id where the CLI exposes one.
 - [ ] Usage errors exit 2 before writing a result file; a missing binary exits 127 **with** one.
-- [ ] Registered in `test/relay-smoke.mjs` — the new relay enters the timeout and abort matrix like
+- [ ] Registered in `test/harness/constants.mjs` — the new relay enters the timeout and abort matrix like
       every sibling. The suite fails if a skill directory is missing from that matrix, is short a
       reference, or is absent from `skills.sh.json`, so this one checks itself.
 - [ ] A row in the README table, and a vocabulary row in `AGENTS.md` using that CLI's own terms.
@@ -71,6 +71,8 @@ patch. Schema ids (`delegate-fleet.v1`, …) bump independently when the JSON sh
 
 Fixes to a relay, a reference, or the README need no claim. Keep the diff to one concern, run
 `node test/relay-smoke.mjs` and `npx skills add . --list`, and say in the pull request what you ran.
+For a single relay or concern during development, `node test/relay-smoke.mjs --only codex` (comma-separated
+module names — see `test/relay/index.mjs`) skips the rest of the matrix.
 A changed relay also wants a direct run — `--help` plus a read-only or no-write run against a
 throwaway repo. The full pre-publish list is in [AGENTS.md](AGENTS.md).
 
