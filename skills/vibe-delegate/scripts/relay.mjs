@@ -648,7 +648,9 @@ function dispatchToVibe(opts, brief, run, writeResult, onReady) {
     settled = true;
     clearWatchdog();
     if (watchdogFired) killChild(child, "SIGKILL");
-    scan(stdoutDecoder.end());
+    // Force a delimiter so a final event without a trailing newline still parses:
+    // the line scanner retains an un-newlined tail, and end() alone can hand it "".
+    scan(`${stdoutDecoder.end()}\n`);
     const stderrEnd = stderrDecoder.end();
     if (stderrEnd.trim()) stderrTail.push(stderrEnd.trimEnd());
     const succeeded = code === 0 && !watchdogFired;
